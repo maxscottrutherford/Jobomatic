@@ -44,9 +44,25 @@ function getDb(): Promise<IDBPDatabase<ResumeTailorDB>> {
           db.createObjectStore("pdfs", { keyPath: "id" });
         }
       },
+    }).catch((err) => {
+      dbPromise = null;
+      throw err;
     });
   }
   return dbPromise;
+}
+
+/** Returns false if IndexedDB is missing or opening the app database fails (e.g. some private browsing modes). */
+export async function probeIndexedDbAvailable(): Promise<boolean> {
+  if (typeof indexedDB === "undefined") {
+    return false;
+  }
+  try {
+    await getDb();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readJson<T>(key: string): T | null {

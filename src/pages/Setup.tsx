@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { LATEX_TEMPLATE_OPTIONS } from "../lib/latexTemplates";
 import { getAppSettings, patchAppSettings } from "../lib/storage";
 import type { AppSettings } from "../types";
 
@@ -9,13 +10,6 @@ const MODEL_OPTIONS: { value: AppSettings["preferredModel"]; label: string }[] =
     { value: "gpt-4o", label: "GPT-4o" },
     { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
     { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
-  ];
-
-const TEMPLATE_OPTIONS: { value: AppSettings["latexTemplate"]; label: string }[] =
-  [
-    { value: "jake", label: "Jake's Resume" },
-    { value: "moderncv", label: "ModernCV" },
-    { value: "custom", label: "Custom" },
   ];
 
 export function Setup() {
@@ -39,14 +33,9 @@ export function Setup() {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmedKey = openaiApiKey.trim();
-    if (!trimmedKey) {
-      setKeyError("Enter your OpenAI API key to continue.");
-      return;
-    }
     setKeyError(null);
 
     const partial: Partial<AppSettings> = {
-      openaiApiKey: trimmedKey,
       preferredModel,
       latexTemplate,
     };
@@ -54,6 +43,14 @@ export function Setup() {
       partial.customLatexTemplate = customLatexTemplate;
     }
 
+    if (!trimmedKey) {
+      partial.openaiApiKey = "";
+      patchAppSettings(partial);
+      navigate("/setup", { replace: true });
+      return;
+    }
+
+    partial.openaiApiKey = trimmedKey;
     const next = patchAppSettings(partial);
     if (next.openaiApiKey.trim()) {
       navigate("/profile", { replace: true });
@@ -140,7 +137,7 @@ export function Setup() {
             }
             className="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500"
           >
-            {TEMPLATE_OPTIONS.map((opt) => (
+            {LATEX_TEMPLATE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>

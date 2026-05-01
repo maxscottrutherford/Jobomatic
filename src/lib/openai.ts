@@ -52,12 +52,23 @@ function parseSseDataLines(chunk: string): { events: string[]; rest: string } {
  * POST chat/completions with `stream: true`, reads SSE chunks, calls `onChunk`
  * for each text delta, returns the full assistant message.
  */
+export function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (typeof err === "object" &&
+      err !== null &&
+      "name" in err &&
+      (err as { name?: string }).name === "AbortError")
+  );
+}
+
 export async function generateWithStreaming(
   systemPrompt: string,
   userMessage: string,
   apiKey: string,
   model: string,
-  onChunk: (chunk: string) => void
+  onChunk: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   let response: Response;
   try {
@@ -67,6 +78,7 @@ export async function generateWithStreaming(
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
+      signal,
       body: JSON.stringify({
         model,
         stream: true,
@@ -77,14 +89,12 @@ export async function generateWithStreaming(
       }),
     });
   } catch (e) {
+    if (isAbortError(e)) {
+      throw e;
+    }
     if (e instanceof TypeError) {
       throw new Error(
         "Network failure: could not reach OpenAI. Check your connection."
-      );
-    }
-    if (e instanceof DOMException && e.name === "AbortError") {
-      throw new Error(
-        "Network failure: request was cancelled or blocked before completion."
       );
     }
     throw e;
@@ -109,7 +119,10 @@ export async function generateWithStreaming(
       let readResult: ReadableStreamReadResult<Uint8Array>;
       try {
         readResult = await reader.read();
-      } catch {
+      } catch (e) {
+        if (isAbortError(e)) {
+          throw e;
+        }
         throw new Error(
           "Network failure: connection lost while streaming from OpenAI."
         );
@@ -174,7 +187,8 @@ export async function generateResume(
   jd: string,
   template: string,
   settings: AppSettings,
-  onChunk?: (c: string) => void
+  onChunk?: (c: string) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   const { systemPrompt, userMessage } = buildResumePrompt(profile, jd, template);
   return generateWithStreaming(
@@ -182,7 +196,8 @@ export async function generateResume(
     userMessage,
     settings.openaiApiKey,
     settings.preferredModel,
-    onChunk ?? noopChunk
+    onChunk ?? noopChunk,
+    signal
   );
 }
 
@@ -192,7 +207,8 @@ export async function generateCoverLetter(
   jobTitle: string,
   company: string,
   settings: AppSettings,
-  onChunk?: (c: string) => void
+  onChunk?: (c: string) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   const { systemPrompt, userMessage } = buildCoverLetterPrompt(
     profile,
@@ -205,6 +221,7 @@ export async function generateCoverLetter(
     userMessage,
     settings.openaiApiKey,
     settings.preferredModel,
-    onChunk ?? noopChunk
+    onChunk ?? noopChunk,
+    signal
   );
 }

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -13,7 +14,10 @@ import {
   downloadPdf,
   downloadTex,
 } from "../lib/latex";
-import { getResumeTemplateLatex } from "../lib/latexTemplates";
+import {
+  getResumeTemplateLatex,
+  LATEX_TEMPLATE_OPTIONS,
+} from "../lib/latexTemplates";
 import {
   generateCoverLetter,
   generateResume,
@@ -23,9 +27,10 @@ import {
   getAppSettings,
   getApplications,
   getUserProfile,
+  patchAppSettings,
   setApplications,
 } from "../lib/storage";
-import type { Application } from "../types";
+import type { AppSettings, Application } from "../types";
 
 const streamBoxClass =
   "max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-3 font-mono text-xs text-neutral-800";
@@ -75,6 +80,16 @@ function applicationEqual(a: Application, b: Application): boolean {
   );
 }
 
+/** Write one application to localStorage (immediate; used after successful re-generate). */
+function persistApplicationRecord(updated: Application): void {
+  const apps = getApplications();
+  const i = apps.findIndex((a) => a.id === updated.id);
+  if (i === -1) return;
+  const next = [...apps];
+  next[i] = updated;
+  setApplications(next);
+}
+
 type TabId = "resume" | "cover";
 
 export function Editor() {
@@ -94,6 +109,12 @@ export function Editor() {
   const [coverRegenerating, setCoverRegenerating] = useState(false);
   const [coverRegenStream, setCoverRegenStream] = useState("");
   const [regenError, setRegenError] = useState<string | null>(null);
+
+  const [resumeLatexTemplate, setResumeLatexTemplate] = useState<
+    AppSettings["latexTemplate"]
+  >("jake");
+  /** Bumps on window focus so custom-template body from Setup is re-read (same-tab string compare may skip updates). */
+  const [templateStorageRevision, setTemplateStorageRevision] = useState(0);
 
   /** Revoke via `previewUrlRef` so cleanup always targets the live blob URL. */
   const setPreviewFromPdf = useCallback((pdf: Uint8Array | null) => {
@@ -123,6 +144,37 @@ export function Editor() {
     setApplication(apps.find((a) => a.id === applicationId) ?? null);
     setLoaded(true);
   }, [applicationId]);
+
+  useEffect(() => {
+    const s = getAppSettings();
+    setResumeLatexTemplate(s?.latexTemplate ?? "jake");
+  }, [applicationId]);
+
+  useEffect(() => {
+    function onFocus() {
+      const s = getAppSettings();
+      setResumeLatexTemplate(s?.latexTemplate ?? "jake");
+      setTemplateStorageRevision((n) => n + 1);
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  const onResumeTemplateChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const v = e.target.value as AppSettings["latexTemplate"];
+      patchAppSettings({ latexTemplate: v });
+      setResumeLatexTemplate(v);
+    },
+    []
+  );
+
+  const customTemplateMissing = useMemo(
+    () =>
+      resumeLatexTemplate === "custom" &&
+      !getAppSettings()?.customLatexTemplate?.trim(),
+    [resumeLatexTemplate, templateStorageRevision]
+  );
 
   useEffect(() => {
     setLastPdf(null);
@@ -196,36 +248,79 @@ export function Editor() {
   }
 
   async function handleRegenerateResume() {
-    if (!application) return;
+    if (!applicationId) return;
     setRegenError(null);
-    const profile = getUserProfile();
+
+    const appFromStorage = getApplications().find((a) => a.id === applicationId);
+    if (!appFromStorage) {
+      setRegenError("This application is no longer in your saved list.");
+      return;
+    }
+
+    let profile = getUserProfile();
     if (!profile) {
       setRegenError("No profile found. Complete your profile first.");
       return;
     }
-    const settings = getAppSettings();
+    let settings = getAppSettings();
     if (!settings?.openaiApiKey?.trim()) {
       setRegenError("No API key. Add one in Setup.");
       return;
     }
-    const template = getResumeTemplateLatex(settings);
-    const jd = application.jobDescriptionText;
+
+    const jd = appFromStorage.jobDescriptionText;
     if (!jd.trim()) {
       setRegenError("This application has no saved job description text.");
+      return;
+    }
+
+    const templatePreview = getResumeTemplateLatex(settings);
+    if (templatePreview === null) {
+      setRegenError(
+        "Custom template is selected but no template text is saved. Open Setup and paste your LaTeX skeleton, then try again."
+      );
       return;
     }
 
     setResumeRegenStream("");
     setResumeRegenerating(true);
     try {
+      profile = getUserProfile();
+      if (!profile) {
+        throw new Error("No profile found. Complete your profile first.");
+      }
+      settings = getAppSettings();
+      if (!settings?.openaiApiKey?.trim()) {
+        throw new Error("No API key. Add one in Setup.");
+      }
+
+      const appForPrompt = getApplications().find((a) => a.id === applicationId);
+      if (!appForPrompt?.jobDescriptionText.trim()) {
+        throw new Error(
+          "This application has no saved job description text."
+        );
+      }
+
+      const template = getResumeTemplateLatex(settings);
+      if (template === null) {
+        throw new Error(
+          "Custom template is selected but no template text is saved. Paste your LaTeX in Setup."
+        );
+      }
       const latex = await generateResume(
         profile,
-        jd,
+        appForPrompt.jobDescriptionText,
         template,
         settings,
         (c) => setResumeRegenStream((s) => s + c)
       );
-      setApplication((a) => (a ? { ...a, resumeLatex: latex } : null));
+
+      setApplication((prev) => {
+        if (!prev || prev.id !== applicationId) return prev;
+        const next: Application = { ...prev, resumeLatex: latex };
+        persistApplicationRecord(next);
+        return next;
+      });
     } catch (err) {
       setRegenError(getOpenAiErrorMessage(err));
     } finally {
@@ -234,19 +329,27 @@ export function Editor() {
   }
 
   async function handleRegenerateCoverLetter() {
-    if (!application) return;
+    if (!applicationId) return;
     setRegenError(null);
-    const profile = getUserProfile();
+
+    const appFromStorage = getApplications().find((a) => a.id === applicationId);
+    if (!appFromStorage) {
+      setRegenError("This application is no longer in your saved list.");
+      return;
+    }
+
+    let profile = getUserProfile();
     if (!profile) {
       setRegenError("No profile found. Complete your profile first.");
       return;
     }
-    const settings = getAppSettings();
+    let settings = getAppSettings();
     if (!settings?.openaiApiKey?.trim()) {
       setRegenError("No API key. Add one in Setup.");
       return;
     }
-    const jd = application.jobDescriptionText;
+
+    const jd = appFromStorage.jobDescriptionText;
     if (!jd.trim()) {
       setRegenError("This application has no saved job description text.");
       return;
@@ -255,15 +358,37 @@ export function Editor() {
     setCoverRegenStream("");
     setCoverRegenerating(true);
     try {
+      profile = getUserProfile();
+      if (!profile) {
+        throw new Error("No profile found. Complete your profile first.");
+      }
+      settings = getAppSettings();
+      if (!settings?.openaiApiKey?.trim()) {
+        throw new Error("No API key. Add one in Setup.");
+      }
+
+      const appForPrompt = getApplications().find((a) => a.id === applicationId);
+      if (!appForPrompt?.jobDescriptionText.trim()) {
+        throw new Error(
+          "This application has no saved job description text."
+        );
+      }
+
       const text = await generateCoverLetter(
         profile,
-        jd,
-        application.jobTitle,
-        application.company,
+        appForPrompt.jobDescriptionText,
+        appForPrompt.jobTitle,
+        appForPrompt.company,
         settings,
         (c) => setCoverRegenStream((s) => s + c)
       );
-      setApplication((a) => (a ? { ...a, coverLetterText: text } : null));
+
+      setApplication((prev) => {
+        if (!prev || prev.id !== applicationId) return prev;
+        const next: Application = { ...prev, coverLetterText: text };
+        persistApplicationRecord(next);
+        return next;
+      });
     } catch (err) {
       setRegenError(getOpenAiErrorMessage(err));
     } finally {
@@ -351,15 +476,17 @@ export function Editor() {
         <nav className="mt-3 flex gap-1 border-b border-neutral-200">
           <button
             type="button"
-            className={`${tabBase} ${tab === "resume" ? tabActive : tabIdle}`}
+            className={`${tabBase} ${tab === "resume" ? tabActive : tabIdle} disabled:cursor-not-allowed disabled:opacity-50`}
             onClick={() => setTab("resume")}
+            disabled={aiBusy}
           >
             Resume
           </button>
           <button
             type="button"
-            className={`${tabBase} ${tab === "cover" ? tabActive : tabIdle}`}
+            className={`${tabBase} ${tab === "cover" ? tabActive : tabIdle} disabled:cursor-not-allowed disabled:opacity-50`}
             onClick={() => setTab("cover")}
+            disabled={aiBusy}
           >
             Cover Letter
           </button>
@@ -386,6 +513,22 @@ export function Editor() {
         <div className="flex min-h-0 flex-1 flex-col gap-0 lg:flex-row">
           <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-neutral-200 lg:border-b-0 lg:border-r">
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-100 px-3 py-2">
+              <label className="flex items-center gap-1.5 text-xs text-neutral-600">
+                <span className="whitespace-nowrap">Template</span>
+                <select
+                  aria-label="LaTeX resume template"
+                  value={resumeLatexTemplate}
+                  onChange={onResumeTemplateChange}
+                  disabled={aiBusy}
+                  className="max-w-[10.5rem] rounded border border-neutral-300 bg-white px-2 py-1 text-xs font-medium text-neutral-900 shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {LATEX_TEMPLATE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 className={btnPrimary}
@@ -429,6 +572,21 @@ export function Editor() {
                 {resumeRegenerating ? "Regenerating…" : "Re-generate Resume"}
               </button>
             </div>
+            {customTemplateMissing ? (
+              <div
+                className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950 sm:px-4"
+                role="status"
+              >
+                Custom template is selected, but no LaTeX skeleton is saved yet.{" "}
+                <Link
+                  to="/setup"
+                  className="font-medium text-amber-900 underline hover:text-amber-950"
+                >
+                  Open Setup
+                </Link>{" "}
+                and paste your template, then save.
+              </div>
+            ) : null}
             <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
               <CodeEditor
                 value={application.resumeLatex}

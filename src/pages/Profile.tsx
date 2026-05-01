@@ -1,10 +1,12 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import { Link } from "react-router-dom";
 
 import { FileUploader } from "../components/FileUploader";
 import { getUserProfile, setUserProfile } from "../lib/storage";
@@ -98,6 +100,14 @@ function emptyProject(): Project {
   };
 }
 
+function isCoreProfileEmpty(profile: UserProfile): boolean {
+  return (
+    profile.experience.length === 0 &&
+    profile.education.length === 0 &&
+    profile.skills.length === 0
+  );
+}
+
 type TagInputProps = {
   label: string;
   tags: string[];
@@ -162,6 +172,8 @@ const btnDanger =
 export function Profile() {
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
 
+  const coreProfileEmpty = useMemo(() => isCoreProfileEmpty(profile), [profile]);
+
   useEffect(() => {
     const t = window.setTimeout(() => {
       setUserProfile(profile);
@@ -191,6 +203,27 @@ export function Profile() {
       <p className="mt-1 text-sm text-neutral-600">
         Changes save automatically (debounced 500ms).
       </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Link
+          to="/new"
+          state={
+            coreProfileEmpty
+              ? { profileIncompleteWarning: true as const }
+              : undefined
+          }
+          className="inline-flex rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
+        >
+          New application
+        </Link>
+        {coreProfileEmpty ? (
+          <p className="max-w-xl text-xs text-amber-900" role="status">
+            You have no work experience, education, or skills yet. You can still
+            open New application, but generation works best with at least one of
+            these filled in.
+          </p>
+        ) : null}
+      </div>
 
       <form
         onSubmit={(e: FormEvent) => e.preventDefault()}

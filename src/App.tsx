@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { ApiKeyGate } from "./components/ApiKeyGate";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { hasApiKey } from "./lib/storage";
 import { Editor } from "./pages/Editor";
 import { History } from "./pages/History";
@@ -14,17 +15,26 @@ function RootRedirect() {
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-white text-neutral-900">
-      <Routes>
-        <Route path="/" element={<RootRedirect />} />
-        <Route path="/setup" element={<Setup />} />
-        <Route element={<ApiKeyGate />}>
-          <Route path="/profile" element={<Profile />} />
-          <Route path="/new" element={<NewApplication />} />
-          <Route path="/editor/:applicationId" element={<Editor />} />
-          <Route path="/history" element={<History />} />
-        </Route>
-      </Routes>
-    </div>
+    <ErrorBoundary>
+      <div className="min-h-screen bg-white text-neutral-900">
+        <Routes>
+          <Route path="/" element={<RootRedirect />} />
+          <Route path="/setup" element={<Setup />} />
+          <Route element={<ApiKeyGate />}>
+            <Route path="/profile" element={<Profile />} />
+            <Route path="/new" element={<NewApplication />} />
+            <Route
+              path="/editor/:applicationId"
+              element={
+                <ErrorBoundary>
+                  <Editor />
+                </ErrorBoundary>
+              }
+            />
+            <Route path="/history" element={<History />} />
+          </Route>
+        </Routes>
+      </div>
+    </ErrorBoundary>
   );
 }

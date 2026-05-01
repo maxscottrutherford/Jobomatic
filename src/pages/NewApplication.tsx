@@ -1,16 +1,18 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ChangeEvent,
   type FormEvent,
 } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import {
   generateCoverLetter,
   generateResume,
   getOpenAiErrorMessage,
+  isAbortError,
 } from "../lib/openai";
 import { getResumeTemplateLatex } from "../lib/latexTemplates";
 import { extractText } from "../lib/parser";
@@ -31,8 +33,17 @@ const streamBoxClass =
 const JD_ACCEPT =
   "application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,.pdf,.docx,.txt";
 
+type NewAppLocationState = { profileIncompleteWarning?: boolean };
+
 export function NewApplication() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const generateAbortRef = useRef<AbortController | null>(null);
+
+  const showProfileIncompleteBanner = Boolean(
+    (location.state as NewAppLocationState | null)?.profileIncompleteWarning
+  );
+
   const [, setStorageTick] = useState(0);
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -42,6 +53,12 @@ export function NewApplication() {
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      generateAbortRef.current?.abort();
+    };
   }, []);
 
   const profile = getUserProfile();
@@ -90,12 +107,32 @@ export function NewApplication() {
     const jd = jdText.trim();
     const title = jobTitle.trim();
     const co = company.trim();
-    if (!title || !co || !jd) {
-      setError("Job title, company, and job description are required.");
+    if (!title) {
+      setError("Job title is required.");
+      return;
+    }
+    if (!co) {
+      setError("Company name is required.");
+      return;
+    }
+    if (!jd) {
+      setError(
+        "Job description is required. Paste the posting text or upload a file."
+      );
       return;
     }
 
     const template = getResumeTemplateLatex(settings);
+    if (template === null) {
+      setError(
+        "Custom template is selected but no template text is saved. Paste your LaTeX in Setup."
+      );
+      return;
+    }
+
+    generateAbortRef.current?.abort();
+    const ac = new AbortController();
+    generateAbortRef.current = ac;
 
     setResumeStream("");
     setCoverStream("");
@@ -103,12 +140,27 @@ export function NewApplication() {
 
     try {
       const [resumeLatex, coverLetterText] = await Promise.all([
-        generateResume(p, jd, template, settings, (c) => {
-          setResumeStream((s) => s + c);
-        }),
-        generateCoverLetter(p, jd, title, co, settings, (c) => {
-          setCoverStream((s) => s + c);
-        }),
+        generateResume(
+          p,
+          jd,
+          template,
+          settings,
+          (c) => {
+            setResumeStream((s) => s + c);
+          },
+          ac.signal
+        ),
+        generateCoverLetter(
+          p,
+          jd,
+          title,
+          co,
+          settings,
+          (c) => {
+            setCoverStream((s) => s + c);
+          },
+          ac.signal
+        ),
       ]);
 
       setPhaseDone(true);
@@ -130,12 +182,18 @@ export function NewApplication() {
 
       setGenerating(false);
 
+      generateAbortRef.current = null;
+
       window.setTimeout(() => {
         navigate(`/editor/${application.id}`, { replace: true });
       }, 400);
     } catch (err) {
+      generateAbortRef.current = null;
       setGenerating(false);
       setPhaseDone(false);
+      if (isAbortError(err)) {
+        return;
+      }
       setError(getOpenAiErrorMessage(err));
     }
   }
@@ -169,6 +227,24 @@ export function NewApplication() {
         Paste a job description or upload a PDF, DOCX, or TXT job posting. Both
         resume and cover letter generate in parallel.
       </p>
+
+      {showProfileIncompleteBanner ? (
+        <div
+          className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+          role="status"
+        >
+          Your profile has no work experience, education, or skills yet.
+          Generation still runs, but you will get better results after you add
+          those sections on{" "}
+          <Link
+            to="/profile"
+            className="font-medium text-amber-900 underline hover:text-amber-950"
+          >
+            Profile
+          </Link>
+          .
+        </div>
+      ) : null}
 
       {error ? (
         <div

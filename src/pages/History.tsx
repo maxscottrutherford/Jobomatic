@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import {
   deletePdfBlob,
   getApplications,
+  probeIndexedDbAvailable,
   setApplications as saveApplications,
 } from "../lib/storage";
 import type { Application } from "../types";
@@ -29,9 +30,23 @@ const btnDanger =
 
 export function History() {
   const [applications, setApplications] = useState<Application[]>([]);
+  const [idbUnavailable, setIdbUnavailable] = useState(false);
 
   useEffect(() => {
     setApplications(sortNewestFirst(getApplications()));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const ok = await probeIndexedDbAvailable();
+      if (!cancelled && !ok) {
+        setIdbUnavailable(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function handleDelete(app: Application) {
@@ -41,7 +56,9 @@ export function History() {
     if (!ok) return;
 
     if (app.pdfBlobId?.trim()) {
-      void deletePdfBlob(app.pdfBlobId);
+      void deletePdfBlob(app.pdfBlobId).catch(() => {
+        /* IndexedDB may be unavailable; local list still updates */
+      });
     }
 
     setApplications((prev) => {
@@ -57,6 +74,18 @@ export function History() {
       <p className="mt-1 text-sm text-neutral-600">
         Saved applications, newest first.
       </p>
+
+      {idbUnavailable ? (
+        <div
+          className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+          role="status"
+        >
+          Offline storage (IndexedDB) is not available in this browser session
+          (for example, in some private browsing modes). Your application list
+          still works, but cached PDFs tied to IndexedDB may not open or delete
+          cleanly.
+        </div>
+      ) : null}
 
       {applications.length === 0 ? (
         <div className="mt-10 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 px-6 py-10 text-center">
