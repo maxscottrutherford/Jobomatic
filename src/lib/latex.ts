@@ -213,7 +213,17 @@ export async function compileLatex(
     };
   }
 
-  return compileWithLatexJsPipeline(trimmed);
+  try {
+    return await compileWithLatexJsPipeline(trimmed);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      pdf: null,
+      errors:
+        msg.trim() ||
+        "LaTeX compilation failed unexpectedly (see console for details).",
+    };
+  }
 }
 
 export function downloadPdf(pdf: Uint8Array, filename: string): void {

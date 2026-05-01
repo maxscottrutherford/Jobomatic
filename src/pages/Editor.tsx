@@ -61,6 +61,20 @@ function downloadPlainText(text: string, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
+function applicationEqual(a: Application, b: Application): boolean {
+  return (
+    a.id === b.id &&
+    a.createdAt === b.createdAt &&
+    a.jobTitle === b.jobTitle &&
+    a.company === b.company &&
+    a.jobDescriptionText === b.jobDescriptionText &&
+    a.resumeLatex === b.resumeLatex &&
+    a.coverLetterText === b.coverLetterText &&
+    a.pdfBlobId === b.pdfBlobId &&
+    a.notes === b.notes
+  );
+}
+
 type TabId = "resume" | "cover";
 
 export function Editor() {
@@ -81,6 +95,7 @@ export function Editor() {
   const [coverRegenStream, setCoverRegenStream] = useState("");
   const [regenError, setRegenError] = useState<string | null>(null);
 
+  /** Revoke via `previewUrlRef` so cleanup always targets the live blob URL. */
   const setPreviewFromPdf = useCallback((pdf: Uint8Array | null) => {
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current);
@@ -130,6 +145,9 @@ export function Editor() {
     const snapshot = application;
     const t = window.setTimeout(() => {
       const apps = getApplications();
+      const persisted = apps.find((a) => a.id === id);
+      if (!persisted) return;
+      if (applicationEqual(persisted, snapshot)) return;
       const i = apps.findIndex((a) => a.id === id);
       if (i === -1) return;
       const next = [...apps];
@@ -191,8 +209,8 @@ export function Editor() {
       return;
     }
     const template = getResumeTemplateLatex(settings);
-    const jd = application.jobDescriptionText.trim();
-    if (!jd) {
+    const jd = application.jobDescriptionText;
+    if (!jd.trim()) {
       setRegenError("This application has no saved job description text.");
       return;
     }
@@ -228,8 +246,8 @@ export function Editor() {
       setRegenError("No API key. Add one in Setup.");
       return;
     }
-    const jd = application.jobDescriptionText.trim();
-    if (!jd) {
+    const jd = application.jobDescriptionText;
+    if (!jd.trim()) {
       setRegenError("This application has no saved job description text.");
       return;
     }

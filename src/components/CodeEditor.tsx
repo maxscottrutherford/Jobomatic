@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react";
-import { Annotation, Compartment, EditorState } from "@codemirror/state";
+import {
+  Annotation,
+  ChangeSet,
+  Compartment,
+  EditorState,
+  EditorSelection,
+} from "@codemirror/state";
 import { basicSetup, EditorView } from "codemirror";
 import { latex } from "codemirror-lang-latex";
 
@@ -100,8 +106,31 @@ export function CodeEditor({
     if (!view) return;
     const current = view.state.doc.toString();
     if (current === value) return;
+
+    const oldLen = view.state.doc.length;
+    const changeSet = ChangeSet.of(
+      { from: 0, to: oldLen, insert: value },
+      oldLen,
+    );
+    let selection = view.state.selection.map(changeSet);
+    const len = value.length;
+    const ranges = selection.ranges.map((r) => {
+      const from = Math.max(0, Math.min(r.from, len));
+      const to = Math.max(0, Math.min(r.to, len));
+      if (from <= to) return EditorSelection.range(from, to);
+      return EditorSelection.cursor(Math.min(from, len));
+    });
+    selection =
+      ranges.length > 0
+        ? EditorSelection.create(
+            ranges,
+            Math.min(selection.mainIndex, ranges.length - 1),
+          )
+        : EditorSelection.single(len);
+
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
+      changes: changeSet,
+      selection,
       annotations: externalSync.of(true),
     });
   }, [value]);

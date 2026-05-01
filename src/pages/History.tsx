@@ -44,11 +44,11 @@ export function History() {
       void deletePdfBlob(app.pdfBlobId);
     }
 
-    const next = sortNewestFirst(
-      applications.filter((a) => a.id !== app.id)
-    );
-    saveApplications(next);
-    setApplications(next);
+    setApplications((prev) => {
+      const next = sortNewestFirst(prev.filter((a) => a.id !== app.id));
+      saveApplications(next);
+      return next;
+    });
   }
 
   return (
