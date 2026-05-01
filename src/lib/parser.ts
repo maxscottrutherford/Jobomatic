@@ -11,6 +11,18 @@ const DOCX_TYPES = new Set([
 ]);
 const TEXT_TYPES = new Set(["text/plain", "text/markdown"]);
 
+/** When the browser leaves `file.type` empty, infer from extension (common for .md / .txt). */
+function mimeFromFileName(name: string): string {
+  const n = name.toLowerCase();
+  if (n.endsWith(".pdf")) return "application/pdf";
+  if (n.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (n.endsWith(".txt")) return "text/plain";
+  if (n.endsWith(".md")) return "text/markdown";
+  return "";
+}
+
 function readFileAsText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -50,7 +62,7 @@ async function extractDocxText(file: File): Promise<string> {
  * PDF → pdfjs-dist, DOCX → mammoth, plain/markdown → FileReader.
  */
 export async function extractText(file: File): Promise<string> {
-  const { type } = file;
+  const type = file.type || mimeFromFileName(file.name);
 
   if (PDF_TYPES.has(type)) {
     return extractPdfText(file);
