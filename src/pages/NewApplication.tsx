@@ -10,7 +10,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import {
   generateCoverLetter,
-  generateResume,
+  generateResumeReport,
   getOpenAiErrorMessage,
   isAbortError,
 } from "../lib/openai";
@@ -31,6 +31,9 @@ const streamBoxClass =
 
 const JD_ACCEPT =
   "application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,.pdf,.docx,.txt";
+
+const navHistoryBtnClass =
+  "inline-flex shrink-0 rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-neutral-50";
 
 type NewAppLocationState = { profileIncompleteWarning?: boolean };
 
@@ -131,7 +134,7 @@ export function NewApplication() {
 
     try {
       const [resumeReport, coverLetterText] = await Promise.all([
-        generateResume(
+        generateResumeReport(
           p,
           jd,
           settings,
@@ -191,9 +194,14 @@ export function NewApplication() {
   if (!profile) {
     return (
       <main className="mx-auto max-w-lg p-6">
-        <h1 className="text-xl font-semibold text-neutral-900">
-          New application
-        </h1>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <h1 className="text-xl font-semibold text-neutral-900">
+            New application
+          </h1>
+          <Link to="/history" className={navHistoryBtnClass}>
+            History
+          </Link>
+        </div>
         <p className="mt-3 text-sm text-neutral-700">
           You need a saved profile before you can tailor a resume and cover
           letter. Fill out your profile first, then come back here.
@@ -210,13 +218,21 @@ export function NewApplication() {
 
   return (
     <main className="mx-auto max-w-3xl p-6 pb-16">
-      <h1 className="text-xl font-semibold text-neutral-900">
-        New application
-      </h1>
-      <p className="mt-1 text-sm text-neutral-600">
-        Paste a job description or upload a PDF, DOCX, or TXT job posting. Both
-        the resume recommendation report and cover letter generate in parallel.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-neutral-900">
+            New application
+          </h1>
+          <p className="mt-1 text-sm text-neutral-600">
+            Paste a job description or upload a PDF, DOCX, or TXT job posting.
+            Both the resume recommendation report and cover letter generate in
+            parallel.
+          </p>
+        </div>
+        <Link to="/history" className={navHistoryBtnClass}>
+          History
+        </Link>
+      </div>
 
       {showProfileIncompleteBanner ? (
         <div
@@ -325,7 +341,7 @@ export function NewApplication() {
           <section>
             <h2 className="text-sm font-semibold text-neutral-900">
               {generating && !phaseDone
-                ? "Building resume report…"
+                ? "Analyzing your resume against this role..."
                 : "Resume report"}
             </h2>
             <div className={`mt-2 ${streamBoxClass}`}>

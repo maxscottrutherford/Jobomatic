@@ -25,6 +25,9 @@ function formatCreatedAt(iso: string): string {
 const btnPrimary =
   "inline-flex rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800";
 
+const btnSecondary =
+  "inline-flex rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-neutral-50";
+
 const btnDanger =
   "inline-flex rounded border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-50";
 
@@ -70,10 +73,22 @@ export function History() {
 
   return (
     <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-xl font-semibold text-neutral-900">History</h1>
-      <p className="mt-1 text-sm text-neutral-600">
-        Saved applications, newest first.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-neutral-900">History</h1>
+          <p className="mt-1 text-sm text-neutral-600">
+            Saved applications, newest first.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Link to="/profile" className={btnSecondary}>
+            Profile
+          </Link>
+          <Link to="/new" className={btnPrimary}>
+            New application
+          </Link>
+        </div>
+      </div>
 
       {idbUnavailable ? (
         <div
@@ -94,12 +109,14 @@ export function History() {
             Create one from a job description to tailor your resume and cover
             letter.
           </p>
-          <Link
-            to="/new"
-            className={`mt-6 ${btnPrimary}`}
-          >
-            New application
-          </Link>
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            <Link to="/profile" className={btnSecondary}>
+              Profile
+            </Link>
+            <Link to="/new" className={btnPrimary}>
+              New application
+            </Link>
+          </div>
         </div>
       ) : (
         <ul className="mt-8 divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">

@@ -24,9 +24,8 @@ The app runs entirely in the browser. No backend server is required. All data (A
 - **Framework**: React (Vite)
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS (utility-only, minimal styling for now)
-- **Report display**: Read-only or lightly editable plain text / markdown in the Editor (e.g. CodeMirror or formatted `<pre>` / markdown rendering)
-- **PDF export**: Cover letter PDF via `jsPDF`. Optional: report downloaded as PDF using the same stack (simple rasterization or print-style export—implementation detail)
-- **Code editor**: [CodeMirror 6](https://codemirror.net/) for cover letter (plain text); report view may use markdown mode or a read-focused layout
+- **Editor display**: Read-only structured plain text for the resume report (section headings) and the cover letter; no in-app source editor for either
+- **PDF export**: Cover letter and resume report PDFs via `jsPDF` (`src/lib/pdf.ts`); TXT downloads for both
 - **File parsing**:
   - PDF text extraction: `pdfjs-dist`
   - DOCX text extraction: `mammoth.js`
@@ -58,7 +57,7 @@ src/
     FileUploader.tsx       # Reusable drag-and-drop file upload with parsing
   lib/
     openai.ts              # All OpenAI API calls with streaming support
-    latex.ts               # Cover letter PDF helpers only (e.g. jsPDF); no resume LaTeX compile
+    pdf.ts                 # jsPDF: cover letter PDF, resume report PDF, TXT download helper
     storage.ts             # localStorage + IndexedDB read/write helpers
     parser.ts              # PDF, DOCX, TXT text extraction
     profileParser.ts       # Resume plain text → OpenAI → structured UserProfile for form autofill
@@ -216,13 +215,12 @@ Two tabs: **Resume** and **Cover Letter**
 
 **Cover Letter tab:**
 
-- Left pane: Plain text editor (CodeMirror or simple `<textarea>`) with the generated cover letter
-- Right pane: Simple formatted text preview
-- "Download as PDF" button — generates a simple single-page (or multi-page) PDF via `jsPDF`
+- Read-only formatted view of `coverLetterText` (same centered card pattern as the resume tab)
+- "Download as PDF" button — multi-page PDF via `jsPDF`
 - "Download as TXT" button
 - "Re-generate Cover Letter" button
 
-Both tabs auto-save changes to the `Application` record in storage (debounced), including edits to the report text if the UI allows editing.
+The resume and cover letter are updated in storage when the user re-generates from this page (and when parallel generation completes on New Application). There is no in-Editor text editing for either tab; users copy or download to edit elsewhere.
 
 ### 5. History (`/history`)
 
@@ -300,7 +298,7 @@ Brief list of things in the profile that are already strong for this role — so
 ### Cover Letter Generation
 
 **System prompt:**
-> You are an expert cover letter writer. Write a concise, specific, professional cover letter tailored to the job and company provided. It should sound human, not templated. Output plain text only — no LaTeX, no markdown, no headers.
+> You are an expert cover letter writer. Write a concise, specific, professional cover letter tailored to the job and company provided. It should sound human, not templated. Output plain text only — no Markdown or other markup, and no heading lines (e.g. lines starting with #).
 
 **User message includes:**
 1. The user's profile, serialized as labeled plain-text sections
@@ -417,17 +415,15 @@ Use the `idb` library. Single database: `resumeTailorDB`, version 1. Object stor
   "react-router-dom": "^6",
   "typescript": "^5",
   "vite": "^5",
-  "codemirror": "^6",
   "pdfjs-dist": "^4",
   "mammoth": "^1",
   "idb": "^8",
   "jspdf": "^2",
-  "tailwindcss": "^3",
-  "uuid": "^9"
+  "tailwindcss": "^3"
 }
 ```
 
-Optional: `@codemirror/lang-markdown` if the report editor uses markdown highlighting. No LaTeX-specific editor packages required for the resume flow.
+The Editor uses read-only views only; no CodeMirror or LaTeX-related editor packages.
 
 ---
 

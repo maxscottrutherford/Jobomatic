@@ -127,54 +127,14 @@ const RESUME_AUTOFILL_ACCEPT = [
   ".md",
 ].join(",");
 
+const navHistoryBtnClass =
+  "inline-flex shrink-0 rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-neutral-50";
+
 function isResumeAutofillFile(file: File): boolean {
   if ((RESUME_AUTOFILL_ACCEPT_MIMES as readonly string[]).includes(file.type)) {
     return true;
   }
   return /\.(pdf|docx|txt|md)$/i.test(file.name);
-}
-
-function stringIsEmpty(s: string | undefined): boolean {
-  return s == null || String(s).trim() === "";
-}
-
-function mergeOptionalString(
-  existing: string | undefined,
-  extracted: string | undefined
-): string | undefined {
-  if (!stringIsEmpty(existing)) return existing;
-  if (!stringIsEmpty(extracted)) return extracted!.trim();
-  return existing;
-}
-
-function mergeSkillsLikeLists(a: string[], b: string[] | undefined): string[] {
-  const ext = b ?? [];
-  if (a.length === 0) return ext;
-  if (ext.length === 0) return a;
-  const seen = new Set(a.map((s) => s.toLowerCase()));
-  const out = [...a];
-  for (const s of ext) {
-    const k = s.trim();
-    if (!k) continue;
-    const lower = k.toLowerCase();
-    if (!seen.has(lower)) {
-      seen.add(lower);
-      out.push(k);
-    }
-  }
-  return out;
-}
-
-function mergeRecordLists<T extends { id: string }>(
-  existing: T[],
-  extracted: T[] | undefined
-): T[] {
-  const ext = extracted ?? [];
-  if (existing.length === 0) {
-    return ext.length > 0 ? ext.map((row) => ({ ...row })) : existing;
-  }
-  if (ext.length === 0) return existing;
-  return [...existing, ...ext.map((row) => ({ ...row }))];
 }
 
 const MIN_RESUME_AUTOFILL_CHARS = 100;
@@ -234,64 +194,76 @@ function countExtractedNonEmptyFields(
   return n;
 }
 
-function mergeProfile(
+/**
+ * Apply a fresh resume extraction: replace structured fields from the new file only
+ * (no merging with previous jobs/skills). Preserves manually uploaded profile files.
+ * Name/email fall back to existing values if the model omits them so the form stays valid.
+ */
+function replaceProfileFromResumeExtraction(
   existing: UserProfile,
   extracted: Partial<UserProfile>
 ): UserProfile {
   const e = extracted;
 
-  const name =
-    stringIsEmpty(existing.name) && !stringIsEmpty(e.name)
-      ? e.name!.trim()
-      : existing.name;
-  const email =
-    stringIsEmpty(existing.email) && !stringIsEmpty(e.email)
-      ? e.email!.trim()
-      : existing.email;
+  const opt = (s: string | undefined): string | undefined => {
+    const t = s?.trim();
+    return t ? t : undefined;
+  };
 
-  const phone = mergeOptionalString(existing.phone, e.phone);
-  const location = mergeOptionalString(existing.location, e.location);
-  const linkedIn = mergeOptionalString(existing.linkedIn, e.linkedIn);
-  const github = mergeOptionalString(existing.github, e.github);
-  const portfolio = mergeOptionalString(existing.portfolio, e.portfolio);
-  const summary = mergeOptionalString(existing.summary, e.summary);
-  const extraContext = mergeOptionalString(existing.extraContext, e.extraContext);
+  const name = (e.name?.trim() || existing.name || "").trim();
+  const email = (e.email?.trim() || existing.email || "").trim();
 
-  const experience = mergeRecordLists(existing.experience, e.experience);
-  const education = mergeRecordLists(existing.education, e.education);
-  const projects = mergeRecordLists(existing.projects, e.projects);
-  const skills = mergeSkillsLikeLists(existing.skills, e.skills);
+  const experience = (e.experience ?? []).map((row) => ({
+    ...row,
+    id: row.id?.trim() ? row.id : newId(),
+    bullets: row.bullets ?? [],
+    tools: row.tools ?? [],
+  }));
 
-  let certifications: string[] | undefined;
-  {
-    const ex = existing.certifications ?? [];
-    const ext = e.certifications ?? [];
-    if (ext.length === 0) {
-      certifications = existing.certifications;
-    } else if (ex.length === 0) {
-      certifications = ext.length > 0 ? ext : undefined;
-    } else {
-      const merged = mergeSkillsLikeLists(ex, ext);
-      certifications = merged.length > 0 ? merged : undefined;
-    }
+  const education = (e.education ?? []).map((row) => ({
+    ...row,
+    id: row.id?.trim() ? row.id : newId(),
+    relevantCoursework: row.relevantCoursework ?? [],
+  }));
+
+  const projects = (e.projects ?? []).map((row) => ({
+    ...row,
+    id: row.id?.trim() ? row.id : newId(),
+    tools: row.tools ?? [],
+    bullets: row.bullets ?? [],
+  }));
+
+  const seenSkill = new Set<string>();
+  const skills: string[] = [];
+  for (const s of e.skills ?? []) {
+    const t = s.trim();
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (seenSkill.has(k)) continue;
+    seenSkill.add(k);
+    skills.push(t);
   }
 
+  const certs = (e.certifications ?? [])
+    .map((c) => c.trim())
+    .filter(Boolean);
+  const certifications = certs.length > 0 ? certs : undefined;
+
   return {
-    ...existing,
     name,
     email,
-    phone,
-    location,
-    linkedIn,
-    github,
-    portfolio,
-    summary,
+    phone: opt(e.phone),
+    location: opt(e.location),
+    linkedIn: opt(e.linkedIn),
+    github: opt(e.github),
+    portfolio: opt(e.portfolio),
+    summary: opt(e.summary),
     experience,
     education,
     skills,
     projects,
     certifications,
-    extraContext,
+    extraContext: opt(e.extraContext),
     uploadedFiles: existing.uploadedFiles,
   };
 }
@@ -419,12 +391,12 @@ export function Profile() {
       const extracted = await extractProfileFromResume(resumePlain, settings);
       const extractedFieldCount = countExtractedNonEmptyFields(extracted);
       setProfile((prev) => {
-        const merged = mergeProfile(prev, extracted);
-        setUserProfile(merged);
-        return merged;
+        const next = replaceProfileFromResumeExtraction(prev, extracted);
+        setUserProfile(next);
+        return next;
       });
       setAutofillSuccess(
-        "Profile filled from resume. Review your details below."
+        "Profile replaced from this resume. Review your details below."
       );
       if (extractedFieldCount < 3) {
         setAutofillSparseWarning(
@@ -478,10 +450,17 @@ export function Profile() {
 
   return (
     <main className="mx-auto max-w-3xl p-6 pb-16">
-      <h1 className="text-xl font-semibold text-neutral-900">Profile</h1>
-      <p className="mt-1 text-sm text-neutral-600">
-        Changes save automatically (debounced 500ms).
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-neutral-900">Profile</h1>
+          <p className="mt-1 text-sm text-neutral-600">
+            Changes save automatically (debounced 500ms).
+          </p>
+        </div>
+        <Link to="/history" className={navHistoryBtnClass}>
+          History
+        </Link>
+      </div>
 
       <div className="mt-6 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
         <p className="text-sm font-medium text-neutral-900">

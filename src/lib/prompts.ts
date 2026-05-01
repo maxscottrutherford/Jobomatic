@@ -45,7 +45,7 @@ const RESUME_REPORT_SYSTEM_PROMPT = [
 ].join("\n");
 
 const COVER_LETTER_SYSTEM_PROMPT =
-  "You are an expert cover letter writer. Write a concise, specific, professional cover letter tailored to the job and company provided. It should sound human, not templated. Output plain text only — no LaTeX, no markdown, no headers.";
+  "You are an expert cover letter writer. Write a concise, specific, professional cover letter tailored to the job and company provided. It should sound human, not templated. Output plain text only — no Markdown or other markup, and no heading lines (e.g. lines starting with #).";
 
 /**
  * Full `UserProfile` as labeled plain text for prompts, in context.md order:

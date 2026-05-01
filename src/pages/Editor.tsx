@@ -1,15 +1,15 @@
-import {
-  useCallback,
-  useEffect,
-  useState,
-} from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { CodeEditor } from "../components/CodeEditor";
-import { coverLetterToPdf, downloadTxt } from "../lib/pdf";
+import {
+  coverLetterToPdf,
+  downloadTxt,
+  parseResumeReportSections,
+  reportToPdf,
+} from "../lib/pdf";
 import {
   generateCoverLetter,
-  generateResume,
+  generateResumeReport,
   getOpenAiErrorMessage,
 } from "../lib/openai";
 import {
@@ -19,9 +19,6 @@ import {
   setApplications,
 } from "../lib/storage";
 import type { Application } from "../types";
-
-const streamBoxClass =
-  "max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-3 font-mono text-xs text-neutral-800";
 
 const btnPrimary =
   "rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50";
@@ -38,6 +35,63 @@ const tabIdle =
 function safeFilenamePart(s: string): string {
   const t = s.replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "");
   return t.slice(0, 64) || "document";
+}
+
+function reportDownloadBasename(app: Application): string {
+  return `${safeFilenamePart(app.company)}-${safeFilenamePart(app.jobTitle)}-resume-recommendations`;
+}
+
+/** While regenerating, show the live stream once it has content; otherwise fall back to saved report. */
+function currentResumeReportText(
+  app: Application,
+  regenerating: boolean,
+  stream: string
+): string {
+  if (regenerating) return stream.length > 0 ? stream : app.resumeReport;
+  return app.resumeReport;
+}
+
+function currentCoverLetterText(
+  app: Application,
+  regenerating: boolean,
+  stream: string
+): string {
+  if (regenerating) return stream.length > 0 ? stream : app.coverLetterText;
+  return app.coverLetterText;
+}
+
+function ResumeReportReadOnly({ text }: { text: string }) {
+  const sections = parseResumeReportSections(text);
+  if (!text.trim()) {
+    return (
+      <p className="text-sm text-neutral-400">No report yet.</p>
+    );
+  }
+  if (sections.length === 0) {
+    return (
+      <div className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-800">
+        {text}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {sections.map((sec, i) => (
+        <div key={i}>
+          {sec.header ? (
+            <h3 className="mb-2 border-b border-neutral-200 pb-1 text-xs font-bold uppercase tracking-wide text-neutral-900">
+              {sec.header}
+            </h3>
+          ) : null}
+          {sec.body ? (
+            <div className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-800">
+              {sec.body}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function applicationEqual(a: Application, b: Application): boolean {
@@ -107,18 +161,6 @@ export function Editor() {
     return () => window.clearTimeout(t);
   }, [application]);
 
-  const baseName = application
-    ? `${safeFilenamePart(application.jobTitle)}-${safeFilenamePart(application.company)}`
-    : "document";
-
-  const updateResumeReport = useCallback((text: string) => {
-    setApplication((a) => (a ? { ...a, resumeReport: text } : null));
-  }, []);
-
-  const updateCoverLetter = useCallback((text: string) => {
-    setApplication((a) => (a ? { ...a, coverLetterText: text } : null));
-  }, []);
-
   async function handleRegenerateResume() {
     if (!applicationId) return;
     setRegenError(null);
@@ -165,7 +207,7 @@ export function Editor() {
         );
       }
 
-      const report = await generateResume(
+      const report = await generateResumeReport(
         profile,
         appForPrompt.jobDescriptionText,
         settings,
@@ -253,30 +295,6 @@ export function Editor() {
     }
   }
 
-  function handleDownloadReportTxt() {
-    if (!application) return;
-    downloadTxt(application.resumeReport, `${baseName}-resume-report`);
-  }
-
-  async function handleCoverLetterPdf() {
-    if (!application) return;
-    try {
-      await coverLetterToPdf(
-        application.coverLetterText,
-        `${baseName}-cover-letter`
-      );
-    } catch (e) {
-      setRegenError(
-        e instanceof Error ? e.message : "Could not build cover letter PDF."
-      );
-    }
-  }
-
-  function handleCoverLetterTxt() {
-    if (!application) return;
-    downloadTxt(application.coverLetterText, `${baseName}-cover-letter`);
-  }
-
   if (!loaded) {
     return (
       <main className="p-6">
@@ -305,7 +323,50 @@ export function Editor() {
     );
   }
 
+  const app = application;
   const aiBusy = resumeRegenerating || coverRegenerating;
+  const reportDisplayText = currentResumeReportText(
+    app,
+    resumeRegenerating,
+    resumeRegenStream
+  );
+  const canDownloadReport = reportDisplayText.trim().length > 0;
+
+  function handleDownloadReportTxt() {
+    downloadTxt(reportDisplayText, reportDownloadBasename(app));
+  }
+
+  function handleDownloadReportPdf() {
+    try {
+      reportToPdf(reportDisplayText, reportDownloadBasename(app));
+    } catch (e) {
+      setRegenError(
+        e instanceof Error ? e.message : "Could not build report PDF."
+      );
+    }
+  }
+
+  const coverDisplayText = currentCoverLetterText(
+    app,
+    coverRegenerating,
+    coverRegenStream
+  );
+  const canDownloadCover = coverDisplayText.trim().length > 0;
+  const coverBasename = `${safeFilenamePart(app.jobTitle)}-${safeFilenamePart(app.company)}`;
+
+  async function handleCoverLetterPdf() {
+    try {
+      await coverLetterToPdf(coverDisplayText, `${coverBasename}-cover-letter`);
+    } catch (e) {
+      setRegenError(
+        e instanceof Error ? e.message : "Could not build cover letter PDF."
+      );
+    }
+  }
+
+  function handleCoverLetterTxt() {
+    downloadTxt(coverDisplayText, `${coverBasename}-cover-letter`);
+  }
 
   return (
     <main className="flex min-h-screen flex-col bg-white">
@@ -362,122 +423,94 @@ export function Editor() {
       ) : null}
 
       {tab === "resume" ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-0 lg:flex-row">
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-neutral-200 lg:border-b-0 lg:border-r">
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-100 px-3 py-2">
-              <button
-                type="button"
-                className={btnSecondary}
-                onClick={handleDownloadReportTxt}
-                disabled={aiBusy}
-              >
-                Download report (.txt)
-              </button>
-              <button
-                type="button"
-                className={btnSecondary}
-                onClick={handleRegenerateResume}
-                disabled={aiBusy}
-              >
-                {resumeRegenerating ? "Regenerating…" : "Re-generate report"}
-              </button>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
-              <CodeEditor
-                value={application.resumeReport}
-                onChange={updateResumeReport}
-                language="plaintext"
-                readOnly={resumeRegenerating}
-              />
-            </div>
-            {resumeRegenerating ? (
-              <div className="shrink-0 border-t border-neutral-200 px-3 py-2 sm:px-4">
-                <h2 className="text-xs font-semibold text-neutral-900">
-                  Regenerating resume report…
-                </h2>
-                <div className={`mt-2 ${streamBoxClass}`}>
-                  {resumeRegenStream || "…"}
-                </div>
-              </div>
-            ) : null}
-          </section>
-
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-neutral-50">
-            <div className="shrink-0 px-3 py-2 text-xs font-medium text-neutral-600">
-              Preview
-            </div>
-            <div className="min-h-[280px] flex-1 min-h-0 overflow-auto p-4">
-              <div className="max-w-none whitespace-pre-wrap text-sm leading-relaxed text-neutral-900">
-                {application.resumeReport || (
-                  <span className="text-neutral-400">No report yet.</span>
-                )}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-100 px-3 py-2">
+            <button
+              type="button"
+              className={btnPrimary}
+              onClick={handleDownloadReportPdf}
+              disabled={aiBusy || !canDownloadReport}
+            >
+              Download as PDF
+            </button>
+            <button
+              type="button"
+              className={btnSecondary}
+              onClick={handleDownloadReportTxt}
+              disabled={aiBusy || !canDownloadReport}
+            >
+              Download as TXT
+            </button>
+            <button
+              type="button"
+              className={btnSecondary}
+              onClick={handleRegenerateResume}
+              disabled={aiBusy}
+            >
+              {resumeRegenerating ? "Regenerating…" : "Re-generate Report"}
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center gap-3 px-4 py-8 sm:px-6 sm:py-10">
+              {resumeRegenerating ? (
+                <p className="shrink-0 text-center text-xs font-medium text-neutral-500">
+                  Streaming updated report…
+                </p>
+              ) : null}
+              <div className="shrink-0 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm sm:p-6">
+                <ResumeReportReadOnly text={reportDisplayText} />
               </div>
             </div>
-          </section>
+          </div>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-0 lg:flex-row">
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-neutral-200 lg:border-b-0 lg:border-r">
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-100 px-3 py-2">
-              <button
-                type="button"
-                className={btnPrimary}
-                onClick={handleCoverLetterPdf}
-                disabled={aiBusy}
-              >
-                Download as PDF
-              </button>
-              <button
-                type="button"
-                className={btnSecondary}
-                onClick={handleCoverLetterTxt}
-                disabled={aiBusy}
-              >
-                Download as TXT
-              </button>
-              <button
-                type="button"
-                className={btnSecondary}
-                onClick={handleRegenerateCoverLetter}
-                disabled={aiBusy}
-              >
-                {coverRegenerating
-                  ? "Regenerating…"
-                  : "Re-generate Cover Letter"}
-              </button>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
-              <CodeEditor
-                value={application.coverLetterText}
-                onChange={updateCoverLetter}
-                language="plaintext"
-                readOnly={coverRegenerating}
-              />
-            </div>
-            {coverRegenerating ? (
-              <div className="shrink-0 border-t border-neutral-200 px-3 py-2 sm:px-4">
-                <h2 className="text-xs font-semibold text-neutral-900">
-                  Regenerating cover letter…
-                </h2>
-                <div className={`mt-2 ${streamBoxClass}`}>
-                  {coverRegenStream || "…"}
-                </div>
-              </div>
-            ) : null}
-          </section>
-
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-neutral-50">
-            <div className="shrink-0 px-3 py-2 text-xs font-medium text-neutral-600">
-              Preview
-            </div>
-            <div className="min-h-[280px] flex-1 min-h-0 overflow-auto p-4">
-              <div className="max-w-none whitespace-pre-wrap text-sm leading-relaxed text-neutral-900">
-                {application.coverLetterText || (
-                  <span className="text-neutral-400">No content yet.</span>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-100 px-3 py-2">
+            <button
+              type="button"
+              className={btnPrimary}
+              onClick={handleCoverLetterPdf}
+              disabled={aiBusy || !canDownloadCover}
+            >
+              Download as PDF
+            </button>
+            <button
+              type="button"
+              className={btnSecondary}
+              onClick={handleCoverLetterTxt}
+              disabled={aiBusy || !canDownloadCover}
+            >
+              Download as TXT
+            </button>
+            <button
+              type="button"
+              className={btnSecondary}
+              onClick={handleRegenerateCoverLetter}
+              disabled={aiBusy}
+            >
+              {coverRegenerating
+                ? "Regenerating…"
+                : "Re-generate Cover Letter"}
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center gap-3 px-4 py-8 sm:px-6 sm:py-10">
+              {coverRegenerating ? (
+                <p className="shrink-0 text-center text-xs font-medium text-neutral-500">
+                  Streaming updated cover letter…
+                </p>
+              ) : null}
+              <div className="shrink-0 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm sm:p-6">
+                {coverDisplayText.trim() ? (
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-900">
+                    {coverDisplayText}
+                  </div>
+                ) : (
+                  <p className="text-sm text-neutral-400">No content yet.</p>
                 )}
               </div>
             </div>
-          </section>
+          </div>
         </div>
       )}
     </main>

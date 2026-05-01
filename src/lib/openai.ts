@@ -182,7 +182,11 @@ export async function generateWithStreaming(
 
 const noopChunk = (): void => {};
 
-export async function generateResume(
+/**
+ * Streams a resume recommendation report (plain text) using `buildResumeReportPrompt`.
+ * Same transport and errors as `generateCoverLetter` (401/429/5xx via `mapHttpError`, network via `generateWithStreaming`).
+ */
+export async function generateResumeReport(
   profile: UserProfile,
   jd: string,
   settings: AppSettings,
