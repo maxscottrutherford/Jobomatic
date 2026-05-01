@@ -14,7 +14,6 @@ import {
   getOpenAiErrorMessage,
   isAbortError,
 } from "../lib/openai";
-import { getResumeTemplateLatex } from "../lib/latexTemplates";
 import { extractText } from "../lib/parser";
 import {
   getAppSettings,
@@ -122,14 +121,6 @@ export function NewApplication() {
       return;
     }
 
-    const template = getResumeTemplateLatex(settings);
-    if (template === null) {
-      setError(
-        "Custom template is selected but no template text is saved. Paste your LaTeX in Setup."
-      );
-      return;
-    }
-
     generateAbortRef.current?.abort();
     const ac = new AbortController();
     generateAbortRef.current = ac;
@@ -139,11 +130,10 @@ export function NewApplication() {
     setGenerating(true);
 
     try {
-      const [resumeLatex, coverLetterText] = await Promise.all([
+      const [resumeReport, coverLetterText] = await Promise.all([
         generateResume(
           p,
           jd,
-          template,
           settings,
           (c) => {
             setResumeStream((s) => s + c);
@@ -171,7 +161,7 @@ export function NewApplication() {
         jobTitle: title,
         company: co,
         jobDescriptionText: jd,
-        resumeLatex,
+        resumeReport,
         coverLetterText,
         pdfBlobId: undefined,
         notes: undefined,
@@ -225,7 +215,7 @@ export function NewApplication() {
       </h1>
       <p className="mt-1 text-sm text-neutral-600">
         Paste a job description or upload a PDF, DOCX, or TXT job posting. Both
-        resume and cover letter generate in parallel.
+        the resume recommendation report and cover letter generate in parallel.
       </p>
 
       {showProfileIncompleteBanner ? (
@@ -335,8 +325,8 @@ export function NewApplication() {
           <section>
             <h2 className="text-sm font-semibold text-neutral-900">
               {generating && !phaseDone
-                ? "Tailoring resume…"
-                : "Resume (LaTeX)"}
+                ? "Building resume report…"
+                : "Resume report"}
             </h2>
             <div className={`mt-2 ${streamBoxClass}`}>
               {resumeStream || (generating && !phaseDone ? "…" : "")}

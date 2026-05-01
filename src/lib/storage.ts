@@ -92,7 +92,6 @@ export function patchAppSettings(partial: Partial<AppSettings>): AppSettings {
   const next: AppSettings = {
     openaiApiKey: "",
     preferredModel: "gpt-4o",
-    latexTemplate: "jake",
     ...current,
     ...partial,
   };
@@ -113,8 +112,14 @@ export function setUserProfile(profile: UserProfile): void {
   writeJson(LS_KEYS.profile, profile);
 }
 
+type StoredApplication = Application & { resumeLatex?: string };
+
 export function getApplications(): Application[] {
-  return readJson<Application[]>(LS_KEYS.applications) ?? [];
+  const list = readJson<StoredApplication[]>(LS_KEYS.applications) ?? [];
+  return list.map(({ resumeLatex, ...rest }) => ({
+    ...rest,
+    resumeReport: rest.resumeReport ?? resumeLatex ?? "",
+  }));
 }
 
 export function setApplications(apps: Application[]): void {

@@ -1,7 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { LATEX_TEMPLATE_OPTIONS } from "../lib/latexTemplates";
 import { getAppSettings, patchAppSettings } from "../lib/storage";
 import type { AppSettings } from "../types";
 
@@ -22,12 +21,6 @@ export function Setup() {
   const [preferredModel, setPreferredModel] = useState<
     AppSettings["preferredModel"]
   >(() => saved?.preferredModel ?? "gpt-4o");
-  const [latexTemplate, setLatexTemplate] = useState<
-    AppSettings["latexTemplate"]
-  >(() => saved?.latexTemplate ?? "jake");
-  const [customLatexTemplate, setCustomLatexTemplate] = useState(
-    () => saved?.customLatexTemplate ?? ""
-  );
   const [keyError, setKeyError] = useState<string | null>(null);
 
   function handleSubmit(e: FormEvent) {
@@ -37,11 +30,7 @@ export function Setup() {
 
     const partial: Partial<AppSettings> = {
       preferredModel,
-      latexTemplate,
     };
-    if (latexTemplate === "custom") {
-      partial.customLatexTemplate = customLatexTemplate;
-    }
 
     if (!trimmedKey) {
       partial.openaiApiKey = "";
@@ -120,50 +109,6 @@ export function Setup() {
             ))}
           </select>
         </div>
-
-        <div>
-          <label
-            htmlFor="latex-template"
-            className="block text-sm font-medium text-neutral-800"
-          >
-            LaTeX resume template
-          </label>
-          <select
-            id="latex-template"
-            name="latexTemplate"
-            value={latexTemplate}
-            onChange={(e) =>
-              setLatexTemplate(e.target.value as AppSettings["latexTemplate"])
-            }
-            className="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500"
-          >
-            {LATEX_TEMPLATE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {latexTemplate === "custom" ? (
-          <div>
-            <label
-              htmlFor="custom-latex-template"
-              className="block text-sm font-medium text-neutral-800"
-            >
-              Custom LaTeX template
-            </label>
-            <textarea
-              id="custom-latex-template"
-              name="customLatexTemplate"
-              value={customLatexTemplate}
-              onChange={(e) => setCustomLatexTemplate(e.target.value)}
-              rows={12}
-              className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 font-mono text-xs shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500"
-              placeholder="Paste full .tex skeleton with placeholders…"
-            />
-          </div>
-        ) : null}
 
         <button
           type="submit"

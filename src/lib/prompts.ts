@@ -15,8 +15,34 @@ export function approximateMaxUserMessageChars(
 /** @deprecated Prefer `approximateMaxUserMessageChars()`; kept for callers using chars directly. */
 export const DEFAULT_MAX_USER_MESSAGE_CHARS = approximateMaxUserMessageChars();
 
-const RESUME_SYSTEM_PROMPT =
-  "You are an expert resume writer and ATS optimization specialist. Your job is to produce a complete, valid LaTeX resume using the provided template. Tailor the resume specifically to the job description by mirroring its keywords and language. Only include skills and experience that are relevant to this role. Output only valid LaTeX source code — no explanation, no markdown, no code fences.";
+const RESUME_REPORT_SYSTEM_PROMPT = [
+  "You are an expert resume coach and ATS optimization specialist.",
+  "",
+  "Analyze the user's profile against the job description they provided. Return a single structured recommendation report in plain text only.",
+  "",
+  "Use exactly these section headers, each on its own line in ALL CAPS as shown, followed by a blank line, then the section body:",
+  "SUMMARY",
+  "HEADLINE / TITLE",
+  "PROFESSIONAL SUMMARY",
+  "WORK EXPERIENCE",
+  "SKILLS SECTION",
+  "KEYWORDS TO ADD",
+  "WHAT TO LEAVE UNCHANGED",
+  "",
+  "Do not use Markdown: no # headers, no ** bold, no bullet lines starting with * or -. Use plain paragraphs and plain lines only.",
+  "",
+  "SUMMARY: 2–3 sentences on fit to the role and the biggest gaps.",
+  "HEADLINE / TITLE: recommended title line for the top of their resume.",
+  "PROFESSIONAL SUMMARY: a concrete rewrite of their summary tailored to this role.",
+  "WORK EXPERIENCE: For each relevant job from their profile, use a subheading line with job title and company, then give specific rewritten bullet text they should paste into their resume—full sentences, not vague advice like \"improve this bullet.\" Every suggested bullet must start with a strong action verb. Weave in job-description vocabulary naturally (no keyword stuffing). Clearly note any existing bullets they should remove as not relevant to this role.",
+  "SKILLS SECTION: skills to add (in JD but missing from profile), skills to remove (not relevant), and recommended grouping or ordering.",
+  "KEYWORDS TO ADD: a flat list of ATS-relevant terms from the JD that do not appear anywhere in the profile yet; they should be incorporated into the rewrites above where appropriate.",
+  "WHAT TO LEAVE UNCHANGED: brief list of strengths already aligned with the role so they know what not to change.",
+  "",
+  "Be specific and direct—actionable guidance only, not generic resume tips. Do not invent employers, degrees, or roles that are not supported by the profile.",
+  "",
+  "Output plain text only: the report body starting with the first section header. No preamble or closing commentary.",
+].join("\n");
 
 const COVER_LETTER_SYSTEM_PROMPT =
   "You are an expert cover letter writer. Write a concise, specific, professional cover letter tailored to the job and company provided. It should sound human, not templated. Output plain text only — no LaTeX, no markdown, no headers.";
@@ -24,8 +50,13 @@ const COVER_LETTER_SYSTEM_PROMPT =
 /**
  * Full `UserProfile` as labeled plain text for prompts, in context.md order:
  * core sections → uploaded files (`--- [name] (type) ---` blocks) → extra context.
+ * With `omitUploadsAndExtra: true`, stops before the uploaded-files and extra-context blocks
+ * (for callers that add those separately).
  */
-export function serializeProfile(profile: UserProfile): string {
+export function serializeProfile(
+  profile: UserProfile,
+  options?: { omitUploadsAndExtra?: boolean }
+): string {
   const blocks: string[] = [];
 
   blocks.push("PERSONAL INFORMATION:");
@@ -104,15 +135,17 @@ export function serializeProfile(profile: UserProfile): string {
     }
   }
 
-  blocks.push("");
-  blocks.push("UPLOADED FILES (parsed text):");
-  const uploads = serializeUploadedFiles(profile.uploadedFiles).trim();
-  blocks.push(uploads || "(None)");
-
-  if (profile.extraContext?.trim()) {
+  if (!options?.omitUploadsAndExtra) {
     blocks.push("");
-    blocks.push("Additional context from user:");
-    blocks.push(profile.extraContext.trim());
+    blocks.push("UPLOADED FILES (parsed text):");
+    const uploads = serializeUploadedFiles(profile.uploadedFiles).trim();
+    blocks.push(uploads || "(None)");
+
+    if (profile.extraContext?.trim()) {
+      blocks.push("");
+      blocks.push("Additional context from user:");
+      blocks.push(profile.extraContext.trim());
+    }
   }
 
   return blocks.join("\n").trim();
@@ -175,37 +208,28 @@ function summarizeOlderExperienceEntry(exp: WorkExperience): WorkExperience {
   };
 }
 
-function buildResumeUserMessage(
-  profile: UserProfile,
-  jd: string,
-  templateLatex: string
-): string {
+function buildResumeReportUserMessage(profile: UserProfile, jd: string): string {
   const parts: string[] = [];
 
-  parts.push(templateLatex.trim());
+  parts.push(serializeProfile(profile, { omitUploadsAndExtra: true }));
+
   parts.push("");
-  parts.push(serializeProfile(profile));
+  parts.push("Uploaded files (parsed text):");
+  parts.push(serializeUploadedFiles(profile.uploadedFiles).trim() || "(None)");
+
+  if (profile.extraContext?.trim()) {
+    parts.push("");
+    parts.push("Additional context from user:");
+    parts.push(profile.extraContext.trim());
+  }
 
   parts.push("");
   parts.push("The full job description text:");
   parts.push(jd.trim());
 
   parts.push("");
-  parts.push("Final instructions:");
   parts.push(
-    "- Mirror keywords and phrases from the JD throughout the resume"
-  );
-  parts.push(
-    "- Reorder and rewrite experience bullets to emphasize what's most relevant to this role"
-  );
-  parts.push(
-    "- Only list skills that appear in both the profile and the JD"
-  );
-  parts.push(
-    "- Keep to one page unless experience is 7+ years"
-  );
-  parts.push(
-    "- Output only the `.tex` source — nothing else"
+    "Return only the recommendation report. No preamble, no explanation, just the report."
   );
 
   return parts.join("\n");
@@ -431,10 +455,9 @@ export type BuildPromptOptions = {
   maxUserMessageChars?: number;
 };
 
-export function buildResumePrompt(
+export function buildResumeReportPrompt(
   profile: UserProfile,
   jd: string,
-  templateLatex: string,
   options?: BuildPromptOptions
 ): { systemPrompt: string; userMessage: string } {
   const maxChars =
@@ -443,11 +466,10 @@ export function buildResumePrompt(
       options?.maxUserMessageTokensApprox ??
         DEFAULT_MAX_USER_MESSAGE_TOKENS_APPROX
     );
-  const build = (p: UserProfile) =>
-    buildResumeUserMessage(p, jd, templateLatex);
+  const build = (p: UserProfile) => buildResumeReportUserMessage(p, jd);
   const trimmed = truncateProfileForUserMessage(profile, build, maxChars);
   return {
-    systemPrompt: RESUME_SYSTEM_PROMPT,
+    systemPrompt: RESUME_REPORT_SYSTEM_PROMPT,
     userMessage: build(trimmed),
   };
 }

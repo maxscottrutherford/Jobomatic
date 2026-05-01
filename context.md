@@ -2,9 +2,9 @@
 
 ## Overview
 
-Resume Tailor is a client-side web application that automates the job application process. Given a user's professional profile and a target job description, it uses the OpenAI API to generate an ATS-optimized LaTeX resume and a tailored cover letter. The user can edit both outputs in a live editor and export them as PDFs.
+Resume Tailor is a client-side web application that automates the job application process. Given a user's professional profile and a target job description, it uses the OpenAI API to produce (1) a **structured resume recommendation report**—plain text / markdown that tells the user exactly what to change in their existing resume to match the job and pass ATS screening—and (2) a tailored cover letter. The user reviews the report in a readable layout on the Editor page, copies sections or downloads the report as TXT or PDF, and edits their actual resume outside the app (e.g. in Word or Overleaf).
 
-The app runs entirely in the browser. No backend server is required. All data (API key, profile, resume versions, uploaded files) is persisted in `localStorage` and `IndexedDB`. The OpenAI API is called directly from the client using the user-provided API key.
+The app runs entirely in the browser. No backend server is required. All data (API key, profile, applications, uploaded files) is persisted in `localStorage` and `IndexedDB`. The OpenAI API is called directly from the client using the user-provided API key.
 
 **Priority: functionality over aesthetics.** Get the core workflows working before investing in UI polish.
 
@@ -14,8 +14,8 @@ The app runs entirely in the browser. No backend server is required. All data (A
 
 - Functional over polished — core workflows first
 - Zero backend — everything runs client-side
-- Modular — each major feature (profile, resume, cover letter, editor) is its own self-contained module
-- Portable output — the generated LaTeX + PDF should be usable anywhere, independent of this app
+- Modular — each major feature (profile, resume report, cover letter, editor) is its own self-contained module
+- Actionable output — the recommendation report should be specific enough to edit a real resume without guessing
 
 ---
 
@@ -24,18 +24,20 @@ The app runs entirely in the browser. No backend server is required. All data (A
 - **Framework**: React (Vite)
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS (utility-only, minimal styling for now)
-- **LaTeX compilation**: [SwiftLaTeX](https://github.com/SwiftLaTeX/SwiftLaTeX) (WASM, runs in browser, full pdflatex support). Fallback: [latex.js](https://latex.js.org/) if SwiftLaTeX is too heavy to set up initially.
-- **PDF export**: Compiled PDF output from the LaTeX engine. Cover letter PDF via `jsPDF`.
-- **Code editor**: [CodeMirror 6](https://codemirror.net/) with LaTeX syntax highlighting
+- **Report display**: Read-only or lightly editable plain text / markdown in the Editor (e.g. CodeMirror or formatted `<pre>` / markdown rendering)
+- **PDF export**: Cover letter PDF via `jsPDF`. Optional: report downloaded as PDF using the same stack (simple rasterization or print-style export—implementation detail)
+- **Code editor**: [CodeMirror 6](https://codemirror.net/) for cover letter (plain text); report view may use markdown mode or a read-focused layout
 - **File parsing**:
   - PDF text extraction: `pdfjs-dist`
   - DOCX text extraction: `mammoth.js`
   - TXT/MD: native `FileReader` API
 - **Storage**:
-  - `localStorage` for profile data, API key, settings, and small text blobs
-  - `IndexedDB` (via `idb`) for uploaded file blobs, compiled PDFs, and application version history
+  - `localStorage` for profile data, API key, settings, application records (including report text)
+  - `IndexedDB` (via `idb`) for uploaded file blobs and optional binary caches
 - **AI**: OpenAI API (`gpt-4o` default), called directly from the browser
 - **Routing**: `react-router-dom` v6
+
+**Not in scope:** LaTeX generation, in-browser LaTeX compilation, LaTeX templates, or a LaTeX source editor for the resume.
 
 ---
 
@@ -46,21 +48,21 @@ src/
   main.tsx
   App.tsx
   pages/
-    Setup.tsx              # API key entry + model/template settings
+    Setup.tsx              # API key entry + model settings
     Profile.tsx            # User profile builder + file uploads
     NewApplication.tsx     # Job description input + AI generation trigger
-    Editor.tsx             # LaTeX editor + PDF preview (resume + cover letter tabs)
+    Editor.tsx             # Resume report + cover letter tabs (no LaTeX)
     History.tsx            # Past saved applications
   components/
     ApiKeyGate.tsx         # Redirect to /setup if no API key found
     FileUploader.tsx       # Reusable drag-and-drop file upload with parsing
   lib/
     openai.ts              # All OpenAI API calls with streaming support
-    latex.ts               # LaTeX compilation + PDF export helpers
+    latex.ts               # Cover letter PDF helpers only (e.g. jsPDF); no resume LaTeX compile
     storage.ts             # localStorage + IndexedDB read/write helpers
     parser.ts              # PDF, DOCX, TXT text extraction
-    prompts.ts             # All GPT prompt templates (resume + cover letter)
-    latexTemplates.ts      # Built-in LaTeX resume template strings
+    profileParser.ts       # Resume plain text → OpenAI → structured UserProfile for form autofill
+    prompts.ts             # GPT prompt templates (resume report + cover letter)
   types/
     index.ts               # All shared TypeScript interfaces
 ```
@@ -137,9 +139,9 @@ interface Application {
   jobTitle: string;
   company: string;
   jobDescriptionText: string;
-  resumeLatex: string;
+  resumeReport: string;      // plain text / markdown recommendation report from AI
   coverLetterText: string;   // plain text
-  pdfBlobId?: string;        // references a record in IndexedDB
+  pdfBlobId?: string;        // optional; reserved if caching exported blobs in IndexedDB
   notes?: string;
 }
 ```
@@ -150,8 +152,6 @@ interface Application {
 interface AppSettings {
   openaiApiKey: string;
   preferredModel: "gpt-4o" | "gpt-4-turbo" | "gpt-3.5-turbo";
-  latexTemplate: "jake" | "moderncv" | "custom";
-  customLatexTemplate?: string;
 }
 ```
 
@@ -164,12 +164,18 @@ interface AppSettings {
 - Text input for OpenAI API key (saved to `localStorage`)
 - Key is never sent anywhere except directly to `api.openai.com`
 - Dropdown for preferred model (default: `gpt-4o`)
-- Dropdown for LaTeX resume template (Jake's Resume, ModernCV)
-- Option to paste a custom LaTeX template
+- No LaTeX template settings (removed from product scope)
 
 ### 2. Profile Builder (`/profile`)
 
-Sections of the profile form:
+**Autofill from resume (first visit):**
+
+- When the user first opens the profile page, show a prominent **resume upload** path (same accepted types as elsewhere: PDF, DOCX, TXT, MD).
+- Extract plain text with `parser.ts`, then call the OpenAI API (orchestrated from `profileParser.ts`, prompts in `prompts.ts`) to **extract structured fields** matching `UserProfile` (personal info, summary, experience, education, skills, projects, certifications as present in the source).
+- Merge the result into the form so the user can **review and edit** everything before relying on it; existing manual entries may be replaced or merged per product rules (implementation detail).
+- Show loading / error states if the API call fails; the user can still fill the form manually.
+
+**Sections of the profile form:**
 
 - **Personal Info**: name, email, phone, location, LinkedIn, GitHub, portfolio URL
 - **Summary**: short bio / professional summary textarea
@@ -193,9 +199,9 @@ Profile auto-saves to `localStorage` on every change (debounced 500ms).
 - Large textarea to paste the job description text
 - OR upload a JD file (PDF/DOCX/TXT) — extracted text populates the textarea automatically
 - "Generate" button triggers AI generation
-- Generation runs resume and cover letter **in parallel** via `Promise.all`
-- Show loading states with live status: "Tailoring resume...", "Writing cover letter...", "Done"
-- On completion, save the new `Application` to storage and navigate to `/editor/:id`
+- Generation runs **resume report** and cover letter **in parallel** via `Promise.all`
+- Show loading states with live status: "Analyzing resume fit...", "Writing cover letter...", "Done"
+- On completion, save the new `Application` (with `resumeReport` + `coverLetterText`) to storage and navigate to `/editor/:id`
 
 ### 4. Editor (`/editor/:applicationId`)
 
@@ -203,21 +209,20 @@ Two tabs: **Resume** and **Cover Letter**
 
 **Resume tab:**
 
-- Left pane: CodeMirror 6 editor loaded with the generated `.tex` source. LaTeX syntax highlighting enabled.
-- Right pane: Compiled PDF preview. Compile is triggered by a "Compile" button (not on every keystroke — LaTeX compilation is slow). Show compile errors in the preview pane if the LaTeX is invalid.
-- "Download PDF" button — exports the compiled PDF
-- "Download .tex" button — exports the raw LaTeX source file
-- "Re-generate Resume" button — re-runs the resume AI call with the same job description, replaces the editor content
+- Display the `resumeReport` in a readable format (formatted markdown or structured sections with clear headings—not a LaTeX code editor).
+- Actions: **Copy** (full report or per-section if implemented), **Download as TXT**, **Download as PDF** (simple export—implementation may use `jsPDF` or similar).
+- **Re-generate report** button — re-runs the resume-report AI call with the same job description, replaces the stored report
+- No PDF preview of a compiled resume, no Compile button, no Overleaf integration for resume
 
 **Cover Letter tab:**
 
 - Left pane: Plain text editor (CodeMirror or simple `<textarea>`) with the generated cover letter
 - Right pane: Simple formatted text preview
-- "Download as PDF" button — generates a simple single-page PDF via `jsPDF`
+- "Download as PDF" button — generates a simple single-page (or multi-page) PDF via `jsPDF`
 - "Download as TXT" button
 - "Re-generate Cover Letter" button
 
-Both tabs auto-save changes to the `Application` record in storage (debounced).
+Both tabs auto-save changes to the `Application` record in storage (debounced), including edits to the report text if the UI allows editing.
 
 ### 5. History (`/history`)
 
@@ -232,23 +237,65 @@ Both tabs auto-save changes to the `Application` record in storage (debounced).
 
 All prompt templates live in `src/lib/prompts.ts`. All API call logic lives in `src/lib/openai.ts`.
 
-### Resume Generation
+### Profile autofill from resume
 
-**System prompt:**
-> You are an expert resume writer and ATS optimization specialist. Your job is to produce a complete, valid LaTeX resume using the provided template. Tailor the resume specifically to the job description by mirroring its keywords and language. Only include skills and experience that are relevant to this role. Output only valid LaTeX source code — no explanation, no markdown, no code fences.
+Structured extraction of `UserProfile` fields from parsed resume text. Prompt templates for this flow live in `src/lib/profileParser.ts` / `prompts.ts`. The HTTP call may be implemented in `src/lib/openai.ts` and composed by `src/lib/profileParser.ts`.
 
-**User message includes (in order):**
-1. The selected LaTeX template skeleton (full boilerplate with placeholder comments)
-2. The user's profile, serialized as labeled plain-text sections (not JSON)
-3. Parsed text from each uploaded file, each labeled with filename and type
-4. The extra context field (if non-empty), labeled as "Additional context from user:"
-5. The full job description text
-6. Final instructions:
-   - Mirror keywords and phrases from the JD throughout the resume
-   - Reorder and rewrite experience bullets to emphasize what's most relevant to this role
-   - Only list skills that appear in both the profile and the JD
-   - Keep to one page unless experience is 7+ years
-   - Output only the `.tex` source — nothing else
+```ts
+// src/lib/profileParser.ts
+
+async function parseResumeIntoProfile(
+  resumePlainText: string,
+  settings: AppSettings,
+  onChunk?: (chunk: string) => void
+): Promise<UserProfile>
+// Sends resume plain text + instructions; expects model output mapped to UserProfile
+// (generate stable `id` fields for WorkExperience, Education, Project rows as needed)
+```
+
+### Resume recommendation report
+
+The model **does not** output LaTeX. It outputs a **structured plain-text / markdown report** the user follows to edit their own resume.
+
+**System + user prompts** are built with `buildResumeReportPrompt()` (or equivalent) in `prompts.ts`, mirroring the cover-letter pattern: system role + user message with serialized profile, uploads, extra context, and full JD.
+
+**Required report structure (instruct GPT to follow this format exactly, using these section headings):**
+
+```markdown
+## SUMMARY
+A 2–3 sentence overview of how well the profile matches the job and what the biggest gaps are.
+
+## HEADLINE / TITLE
+Recommended job title wording to use at the top of the resume.
+
+## PROFESSIONAL SUMMARY
+Suggested rewrite of their summary/objective section, tailored to this specific role.
+
+## WORK EXPERIENCE
+For each relevant job in their profile:
+- Job title + company (as a header)
+- List of specific bullet point rewrites, each starting with a strong action verb, incorporating keywords from the JD
+- Flag any bullets that should be removed as not relevant
+
+## SKILLS SECTION
+- Skills to ADD (present in JD but missing from profile)
+- Skills to REMOVE (not relevant to this role)
+- Recommended groupings/ordering
+
+## KEYWORDS TO ADD
+A flat list of ATS keywords from the job description that are not currently present anywhere in the profile. These should be woven into the sections above.
+
+## WHAT TO LEAVE UNCHANGED
+Brief list of things in the profile that are already strong for this role — so the user knows what not to touch.
+```
+
+**User message should include (in order):**
+
+1. The user's profile, serialized as labeled plain-text sections (not JSON)
+2. Parsed text from each uploaded file, each labeled with filename and type
+3. The extra context field (if non-empty), labeled as "Additional context from user:"
+4. The full job description text
+5. Final instructions: obey the section structure; be specific and quote JD language where helpful; do not invent jobs or degrees not in the profile; output only the report (no preamble)
 
 ### Cover Letter Generation
 
@@ -286,7 +333,7 @@ async function generateWithStreaming(
 // Reads SSE chunks, calls onChunk with each new text delta
 // Returns the full accumulated response string
 
-async function generateResume(profile: UserProfile, jd: string, template: string, settings: AppSettings, onChunk?: (c: string) => void): Promise<string>
+async function generateResumeReport(profile: UserProfile, jd: string, settings: AppSettings, onChunk?: (c: string) => void): Promise<string>
 
 async function generateCoverLetter(profile: UserProfile, jd: string, jobTitle: string, company: string, settings: AppSettings, onChunk?: (c: string) => void): Promise<string>
 ```
@@ -294,8 +341,8 @@ async function generateCoverLetter(profile: UserProfile, jd: string, jobTitle: s
 Run both in parallel from `NewApplication.tsx`:
 
 ```ts
-const [resumeLatex, coverLetterText] = await Promise.all([
-  generateResume(profile, jd, template, settings, onResumeChunk),
+const [resumeReport, coverLetterText] = await Promise.all([
+  generateResumeReport(profile, jd, settings, onReportChunk),
   generateCoverLetter(profile, jd, jobTitle, company, settings, onCoverChunk),
 ]);
 ```
@@ -331,58 +378,16 @@ Accepted MIME types: `application/pdf`, `application/vnd.openxmlformats-officedo
 
 ---
 
-## LaTeX Templates
-
-Stored as string constants in `src/lib/latexTemplates.ts`. Each template is a full `.tex` file with placeholder comments that the AI prompt instructs GPT to fill in.
-
-**Available templates:**
-- `jake` — Jake's Resume (popular single-column ATS-friendly template)
-- `moderncv` — ModernCV (clean header + two-column layout)
-
-Template skeleton example pattern:
-
-```latex
-% === RESUME TEMPLATE: Jake's Resume ===
-% Fill in each section below based on the user's profile and job description.
-% Do NOT add any text outside of LaTeX commands.
-% Output only valid LaTeX. Do not include explanations or markdown.
-
-\documentclass[letterpaper,11pt]{article}
-% ... full preamble with packages ...
-
-\begin{document}
-
-% --- HEADER ---
-% Insert: full name, phone, email, LinkedIn URL, GitHub URL
-
-% --- EDUCATION ---
-% Insert: institution, degree, graduation date, GPA if provided
-
-% --- EXPERIENCE ---
-% Insert: work experience entries, most recent first
-% Each entry: company, title, date range, 3-5 tailored bullet points
-
-% --- PROJECTS ---
-% Insert: relevant projects with descriptions and tech stack
-
-% --- SKILLS ---
-% Insert: technical skills, grouped by category if possible
-
-\end{document}
-```
-
----
-
 ## Storage Strategy
 
 | Data | Location | Notes |
 |---|---|---|
 | OpenAI API key | `localStorage` | Plain text — personal use only, no backend |
-| App settings | `localStorage` | Model, template preference |
+| App settings | `localStorage` | Model only (no LaTeX fields) |
 | UserProfile (all text fields) | `localStorage` | Auto-saved |
 | Uploaded file blobs | `IndexedDB` (`files` store) | Keyed by UUID |
-| All `Application` records | `localStorage` | LaTeX + cover letter text |
-| Compiled PDF blobs | `IndexedDB` (`pdfs` store) | Keyed by application ID |
+| All `Application` records | `localStorage` | `resumeReport` + `coverLetterText` |
+| Optional PDF blobs | `IndexedDB` (`pdfs` store) | If used for exports |
 
 Use the `idb` library. Single database: `resumeTailorDB`, version 1. Object stores: `files` (keyPath: `id`) and `pdfs` (keyPath: `id`).
 
@@ -395,7 +400,7 @@ Use the `idb` library. Single database: `resumeTailorDB`, version 1. Object stor
 /setup         → API key + settings
 /profile       → Profile builder
 /new           → New application
-/editor/:id    → LaTeX editor for a specific application
+/editor/:id    → Report + cover letter for a specific application
 /history       → Saved applications list
 ```
 
@@ -412,7 +417,6 @@ Use the `idb` library. Single database: `resumeTailorDB`, version 1. Object stor
   "react-router-dom": "^6",
   "typescript": "^5",
   "vite": "^5",
-  "@codemirror/lang-latex": "latest",
   "codemirror": "^6",
   "pdfjs-dist": "^4",
   "mammoth": "^1",
@@ -423,7 +427,7 @@ Use the `idb` library. Single database: `resumeTailorDB`, version 1. Object stor
 }
 ```
 
-SwiftLaTeX is loaded via CDN or as a WASM asset — check the SwiftLaTeX repo for current integration instructions. If it proves difficult to integrate, use latex.js as a fallback and add a prominent "Open in Overleaf" button that passes the `.tex` source as a URL parameter.
+Optional: `@codemirror/lang-markdown` if the report editor uses markdown highlighting. No LaTeX-specific editor packages required for the resume flow.
 
 ---
 
@@ -437,30 +441,27 @@ SwiftLaTeX is loaded via CDN or as a WASM asset — check the SwiftLaTeX repo fo
 - [ ] Basic routing + `ApiKeyGate`
 
 ### Phase 2 — Profile & Setup
-- [ ] Setup page (API key, model, template)
+- [ ] Setup page (API key, model)
 - [ ] Full profile builder form with all sections
 - [ ] File upload component (drag-and-drop, parse on upload, display parsed text)
 - [ ] Profile auto-save
 
 ### Phase 3 — AI Generation
-- [ ] Write all prompt templates in `prompts.ts`
+- [ ] Write resume report + cover letter prompt templates in `prompts.ts`
 - [ ] Implement `openai.ts` with streaming support
 - [ ] New Application page (JD input + upload)
-- [ ] Parallel resume + cover letter generation with live streaming output
+- [ ] Parallel resume report + cover letter generation with live streaming output
 - [ ] Error handling (invalid key, rate limit, token overflow)
 
 ### Phase 4 — Editor & Export
-- [ ] CodeMirror 6 LaTeX editor
-- [ ] LaTeX WASM compilation (SwiftLaTeX or latex.js)
-- [ ] Compiled PDF preview pane with error display
-- [ ] PDF download + .tex download
+- [ ] Editor: resume report view (readable markdown/sections)
+- [ ] Copy + download TXT/PDF for report
 - [ ] Cover letter plain-text editor
 - [ ] Cover letter PDF export via jsPDF
 
 ### Phase 5 — History & Cleanup
 - [ ] History page with saved applications list
-- [ ] Re-generate flows for resume and cover letter
-- [ ] Template switching
+- [ ] Re-generate flows for report and cover letter
 - [ ] Edge case handling and basic error boundaries
 
 ---
@@ -468,8 +469,7 @@ SwiftLaTeX is loaded via CDN or as a WASM asset — check the SwiftLaTeX repo fo
 ## Constraints & Notes
 
 - The OpenAI API key is stored in `localStorage` in plain text. This is acceptable and expected for a personal-use tool. Note this clearly on the Setup page.
-- LaTeX WASM compilation can take 2–5 seconds. Use a "Compile" button rather than live compilation. Show a spinner and display compile errors in the preview pane.
-- The AI will occasionally produce invalid LaTeX. The preview pane should show the raw error output from the LaTeX engine so the user can identify and fix the issue manually or re-generate.
+- The recommendation report is guidance only; the user applies changes in their own resume file.
 - Nothing is sent to any server other than `api.openai.com`. No analytics, no telemetry.
 - All generated content belongs to the user.
 
@@ -479,7 +479,7 @@ SwiftLaTeX is loaded via CDN or as a WASM asset — check the SwiftLaTeX repo fo
 
 ### Overview
 
-The browser extension is a companion to the main web app. It lets the user select one of their tailored `Application` records from the main app, then automatically fills in job application forms on third-party sites (Workday, Greenhouse, Lever, LinkedIn Easy Apply, etc.) using the structured data from that application's associated `UserProfile` and resume.
+The browser extension is a companion to the main web app. It lets the user select one of their `Application` records from the main app, then automatically fills in job application forms on third-party sites (Workday, Greenhouse, Lever, LinkedIn Easy Apply, etc.) using the structured data from that application's associated `UserProfile` and generated **cover letter** text.
 
 The extension reads data directly from the same `localStorage` and `IndexedDB` database that the main app writes to — no sync, no backend, no duplication. This only works when the main app is hosted on a known origin (e.g. `localhost:5173` during development, or a deployed URL in production). The extension uses `chrome.storage` to remember which application the user has "selected" as active.
 
@@ -577,7 +577,7 @@ The popup is a small React app (~300×400px). It has two states:
 - "Sync Now" button — triggers `chrome.scripting.executeScript` to pull data from the app tab
 
 **State 2 — Data synced:**
-- Dropdown: "Active Resume" — lists all saved `Application` records by job title + company
+- Dropdown: "Active application" — lists all saved `Application` records by job title + company
 - When the user selects one, it is saved to `chrome.storage.local` as `activeApplicationId`
 - Shows: selected job title, company, date created
 - "Autofill This Page" button — sends a message to the content script on the active tab to begin autofill
@@ -603,7 +603,7 @@ For each known field, try selectors in order until one matches a visible, enable
 Once a matching field is found, fill it using the appropriate method:
 - `<input type="text">` / `<textarea>`: set `.value`, then dispatch `input` and `change` events (React-controlled inputs require the native input value setter)
 - `<select>`: set `.value` and dispatch `change`
-- `<input type="file">`: **do not autofill** — browsers block programmatic file input. Instead, show a tooltip next to the file input saying "📎 Your resume is ready — click to upload manually" and put the PDF blob URL on the clipboard
+- `<input type="file">`: **do not autofill** — browsers block programmatic file input. Instead, show a tooltip next to the file input saying "📎 Upload your resume file manually" and optionally put suggested text on the clipboard
 - For checkboxes / radio buttons: match by label text and set `.checked`
 
 Always dispatch both `input` and `change` events after setting a value, using the React native input value setter trick:
@@ -685,7 +685,7 @@ The content script maps `UserProfile` fields to form fields. Key mappings:
 | Website / Portfolio | `profile.portfolio` |
 | Cover letter | `application.coverLetterText` |
 | Years of experience | Computed from earliest `experience.startDate` to today |
-| Resume file | Cannot autofill — show tooltip with clipboard copy instead |
+| Resume file | Cannot autofill — show tooltip; user uploads their own file |
 
 For fields that require parsing (city/state from a combined location string, years of experience), do the parsing in `autofill.ts` at fill time.
 

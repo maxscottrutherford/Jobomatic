@@ -1,6 +1,6 @@
 import {
   buildCoverLetterPrompt,
-  buildResumePrompt,
+  buildResumeReportPrompt,
 } from "./prompts";
 import type { AppSettings, UserProfile } from "../types";
 
@@ -185,12 +185,11 @@ const noopChunk = (): void => {};
 export async function generateResume(
   profile: UserProfile,
   jd: string,
-  template: string,
   settings: AppSettings,
   onChunk?: (c: string) => void,
   signal?: AbortSignal
 ): Promise<string> {
-  const { systemPrompt, userMessage } = buildResumePrompt(profile, jd, template);
+  const { systemPrompt, userMessage } = buildResumeReportPrompt(profile, jd);
   return generateWithStreaming(
     systemPrompt,
     userMessage,

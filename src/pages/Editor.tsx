@@ -1,23 +1,12 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
-  useRef,
   useState,
 } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { CodeEditor } from "../components/CodeEditor";
-import {
-  compileLatex,
-  coverLetterToPdf,
-  downloadPdf,
-  downloadTex,
-} from "../lib/latex";
-import {
-  getResumeTemplateLatex,
-  LATEX_TEMPLATE_OPTIONS,
-} from "../lib/latexTemplates";
+import { coverLetterToPdf, downloadTxt } from "../lib/pdf";
 import {
   generateCoverLetter,
   generateResume,
@@ -27,10 +16,9 @@ import {
   getAppSettings,
   getApplications,
   getUserProfile,
-  patchAppSettings,
   setApplications,
 } from "../lib/storage";
-import type { AppSettings, Application } from "../types";
+import type { Application } from "../types";
 
 const streamBoxClass =
   "max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-3 font-mono text-xs text-neutral-800";
@@ -52,20 +40,6 @@ function safeFilenamePart(s: string): string {
   return t.slice(0, 64) || "document";
 }
 
-function downloadPlainText(text: string, filename: string): void {
-  const name = filename.toLowerCase().endsWith(".txt")
-    ? filename
-    : `${filename}.txt`;
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.rel = "noopener";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 function applicationEqual(a: Application, b: Application): boolean {
   return (
     a.id === b.id &&
@@ -73,7 +47,7 @@ function applicationEqual(a: Application, b: Application): boolean {
     a.jobTitle === b.jobTitle &&
     a.company === b.company &&
     a.jobDescriptionText === b.jobDescriptionText &&
-    a.resumeLatex === b.resumeLatex &&
+    a.resumeReport === b.resumeReport &&
     a.coverLetterText === b.coverLetterText &&
     a.pdfBlobId === b.pdfBlobId &&
     a.notes === b.notes
@@ -98,41 +72,11 @@ export function Editor() {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<TabId>("resume");
 
-  const [compiling, setCompiling] = useState(false);
-  const [lastPdf, setLastPdf] = useState<Uint8Array | null>(null);
-  const [compileError, setCompileError] = useState<string | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const previewUrlRef = useRef<string | null>(null);
-
   const [resumeRegenerating, setResumeRegenerating] = useState(false);
   const [resumeRegenStream, setResumeRegenStream] = useState("");
   const [coverRegenerating, setCoverRegenerating] = useState(false);
   const [coverRegenStream, setCoverRegenStream] = useState("");
   const [regenError, setRegenError] = useState<string | null>(null);
-
-  const [resumeLatexTemplate, setResumeLatexTemplate] = useState<
-    AppSettings["latexTemplate"]
-  >("jake");
-  /** Bumps on window focus so custom-template body from Setup is re-read (same-tab string compare may skip updates). */
-  const [templateStorageRevision, setTemplateStorageRevision] = useState(0);
-
-  /** Revoke via `previewUrlRef` so cleanup always targets the live blob URL. */
-  const setPreviewFromPdf = useCallback((pdf: Uint8Array | null) => {
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current);
-      previewUrlRef.current = null;
-    }
-    if (pdf && pdf.length > 0) {
-      const blob = new Blob([new Uint8Array(pdf)], {
-        type: "application/pdf",
-      });
-      const url = URL.createObjectURL(blob);
-      previewUrlRef.current = url;
-      setPreviewUrl(url);
-    } else {
-      setPreviewUrl(null);
-    }
-  }, []);
 
   useEffect(() => {
     if (!applicationId) {
@@ -144,52 +88,6 @@ export function Editor() {
     setApplication(apps.find((a) => a.id === applicationId) ?? null);
     setLoaded(true);
   }, [applicationId]);
-
-  useEffect(() => {
-    const s = getAppSettings();
-    setResumeLatexTemplate(s?.latexTemplate ?? "jake");
-  }, [applicationId]);
-
-  useEffect(() => {
-    function onFocus() {
-      const s = getAppSettings();
-      setResumeLatexTemplate(s?.latexTemplate ?? "jake");
-      setTemplateStorageRevision((n) => n + 1);
-    }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, []);
-
-  const onResumeTemplateChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const v = e.target.value as AppSettings["latexTemplate"];
-      patchAppSettings({ latexTemplate: v });
-      setResumeLatexTemplate(v);
-    },
-    []
-  );
-
-  const customTemplateMissing = useMemo(
-    () =>
-      resumeLatexTemplate === "custom" &&
-      !getAppSettings()?.customLatexTemplate?.trim(),
-    [resumeLatexTemplate, templateStorageRevision]
-  );
-
-  useEffect(() => {
-    setLastPdf(null);
-    setCompileError(null);
-    setPreviewFromPdf(null);
-  }, [applicationId, setPreviewFromPdf]);
-
-  useEffect(() => {
-    return () => {
-      if (previewUrlRef.current) {
-        URL.revokeObjectURL(previewUrlRef.current);
-        previewUrlRef.current = null;
-      }
-    };
-  }, []);
 
   useEffect(() => {
     if (!application) return;
@@ -213,39 +111,13 @@ export function Editor() {
     ? `${safeFilenamePart(application.jobTitle)}-${safeFilenamePart(application.company)}`
     : "document";
 
-  const updateResumeLatex = useCallback((latex: string) => {
-    setApplication((a) => (a ? { ...a, resumeLatex: latex } : null));
+  const updateResumeReport = useCallback((text: string) => {
+    setApplication((a) => (a ? { ...a, resumeReport: text } : null));
   }, []);
 
   const updateCoverLetter = useCallback((text: string) => {
     setApplication((a) => (a ? { ...a, coverLetterText: text } : null));
   }, []);
-
-  async function handleCompile() {
-    if (!application) return;
-    setCompiling(true);
-    setCompileError(null);
-    try {
-      const { pdf, errors } = await compileLatex(application.resumeLatex);
-      if (pdf && pdf.length > 0) {
-        setLastPdf(pdf);
-        setCompileError(null);
-        setPreviewFromPdf(pdf);
-      } else {
-        setLastPdf(null);
-        setPreviewFromPdf(null);
-        setCompileError(errors?.trim() || "Compilation produced no PDF.");
-      }
-    } catch (e) {
-      setLastPdf(null);
-      setPreviewFromPdf(null);
-      setCompileError(
-        e instanceof Error ? e.message : "Compilation failed unexpectedly."
-      );
-    } finally {
-      setCompiling(false);
-    }
-  }
 
   async function handleRegenerateResume() {
     if (!applicationId) return;
@@ -274,14 +146,6 @@ export function Editor() {
       return;
     }
 
-    const templatePreview = getResumeTemplateLatex(settings);
-    if (templatePreview === null) {
-      setRegenError(
-        "Custom template is selected but no template text is saved. Open Setup and paste your LaTeX skeleton, then try again."
-      );
-      return;
-    }
-
     setResumeRegenStream("");
     setResumeRegenerating(true);
     try {
@@ -301,23 +165,16 @@ export function Editor() {
         );
       }
 
-      const template = getResumeTemplateLatex(settings);
-      if (template === null) {
-        throw new Error(
-          "Custom template is selected but no template text is saved. Paste your LaTeX in Setup."
-        );
-      }
-      const latex = await generateResume(
+      const report = await generateResume(
         profile,
         appForPrompt.jobDescriptionText,
-        template,
         settings,
         (c) => setResumeRegenStream((s) => s + c)
       );
 
       setApplication((prev) => {
         if (!prev || prev.id !== applicationId) return prev;
-        const next: Application = { ...prev, resumeLatex: latex };
+        const next: Application = { ...prev, resumeReport: report };
         persistApplicationRecord(next);
         return next;
       });
@@ -396,14 +253,9 @@ export function Editor() {
     }
   }
 
-  function handleDownloadResumePdf() {
-    if (!lastPdf || !lastPdf.length) return;
-    downloadPdf(lastPdf, `${baseName}-resume`);
-  }
-
-  function handleDownloadTex() {
+  function handleDownloadReportTxt() {
     if (!application) return;
-    downloadTex(application.resumeLatex, `${baseName}-resume`);
+    downloadTxt(application.resumeReport, `${baseName}-resume-report`);
   }
 
   async function handleCoverLetterPdf() {
@@ -422,7 +274,7 @@ export function Editor() {
 
   function handleCoverLetterTxt() {
     if (!application) return;
-    downloadPlainText(application.coverLetterText, `${baseName}-cover-letter`);
+    downloadTxt(application.coverLetterText, `${baseName}-cover-letter`);
   }
 
   if (!loaded) {
@@ -480,7 +332,7 @@ export function Editor() {
             onClick={() => setTab("resume")}
             disabled={aiBusy}
           >
-            Resume
+            Resume report
           </button>
           <button
             type="button"
@@ -513,55 +365,13 @@ export function Editor() {
         <div className="flex min-h-0 flex-1 flex-col gap-0 lg:flex-row">
           <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-neutral-200 lg:border-b-0 lg:border-r">
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-100 px-3 py-2">
-              <label className="flex items-center gap-1.5 text-xs text-neutral-600">
-                <span className="whitespace-nowrap">Template</span>
-                <select
-                  aria-label="LaTeX resume template"
-                  value={resumeLatexTemplate}
-                  onChange={onResumeTemplateChange}
-                  disabled={aiBusy}
-                  className="max-w-[10.5rem] rounded border border-neutral-300 bg-white px-2 py-1 text-xs font-medium text-neutral-900 shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {LATEX_TEMPLATE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                className={btnPrimary}
-                onClick={handleCompile}
-                disabled={compiling || aiBusy}
-              >
-                {compiling ? (
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
-                      aria-hidden
-                    />
-                    Compiling…
-                  </span>
-                ) : (
-                  "Compile"
-                )}
-              </button>
               <button
                 type="button"
                 className={btnSecondary}
-                onClick={handleDownloadResumePdf}
-                disabled={!lastPdf || !lastPdf.length || compiling || aiBusy}
-              >
-                Download PDF
-              </button>
-              <button
-                type="button"
-                className={btnSecondary}
-                onClick={handleDownloadTex}
+                onClick={handleDownloadReportTxt}
                 disabled={aiBusy}
               >
-                Download .tex
+                Download report (.txt)
               </button>
               <button
                 type="button"
@@ -569,36 +379,21 @@ export function Editor() {
                 onClick={handleRegenerateResume}
                 disabled={aiBusy}
               >
-                {resumeRegenerating ? "Regenerating…" : "Re-generate Resume"}
+                {resumeRegenerating ? "Regenerating…" : "Re-generate report"}
               </button>
             </div>
-            {customTemplateMissing ? (
-              <div
-                className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950 sm:px-4"
-                role="status"
-              >
-                Custom template is selected, but no LaTeX skeleton is saved yet.{" "}
-                <Link
-                  to="/setup"
-                  className="font-medium text-amber-900 underline hover:text-amber-950"
-                >
-                  Open Setup
-                </Link>{" "}
-                and paste your template, then save.
-              </div>
-            ) : null}
             <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
               <CodeEditor
-                value={application.resumeLatex}
-                onChange={updateResumeLatex}
-                language="latex"
+                value={application.resumeReport}
+                onChange={updateResumeReport}
+                language="plaintext"
                 readOnly={resumeRegenerating}
               />
             </div>
             {resumeRegenerating ? (
               <div className="shrink-0 border-t border-neutral-200 px-3 py-2 sm:px-4">
                 <h2 className="text-xs font-semibold text-neutral-900">
-                  Regenerating resume…
+                  Regenerating resume report…
                 </h2>
                 <div className={`mt-2 ${streamBoxClass}`}>
                   {resumeRegenStream || "…"}
@@ -609,33 +404,14 @@ export function Editor() {
 
           <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-neutral-50">
             <div className="shrink-0 px-3 py-2 text-xs font-medium text-neutral-600">
-              PDF preview
+              Preview
             </div>
-            <div className="relative min-h-[280px] flex-1 min-h-0">
-              {compiling ? (
-                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/70">
-                  <div
-                    className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800"
-                    role="status"
-                    aria-label="Compiling"
-                  />
-                </div>
-              ) : null}
-              {previewUrl ? (
-                <iframe
-                  title="Resume PDF preview"
-                  src={previewUrl}
-                  className="h-full w-full border-0 bg-white"
-                />
-              ) : compileError ? (
-                <pre className="h-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs text-red-900">
-                  {compileError}
-                </pre>
-              ) : (
-                <p className="p-4 text-sm text-neutral-500">
-                  Compile to see a PDF preview here.
-                </p>
-              )}
+            <div className="min-h-[280px] flex-1 min-h-0 overflow-auto p-4">
+              <div className="max-w-none whitespace-pre-wrap text-sm leading-relaxed text-neutral-900">
+                {application.resumeReport || (
+                  <span className="text-neutral-400">No report yet.</span>
+                )}
+              </div>
             </div>
           </section>
         </div>

@@ -2,14 +2,18 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
 import { Link } from "react-router-dom";
 
 import { FileUploader } from "../components/FileUploader";
-import { getUserProfile, setUserProfile } from "../lib/storage";
+import { extractProfileFromResume } from "../lib/profileParser";
+import { extractText } from "../lib/parser";
+import { getAppSettings, getUserProfile, setUserProfile } from "../lib/storage";
 import type {
   Education,
   Project,
@@ -108,6 +112,195 @@ function isCoreProfileEmpty(profile: UserProfile): boolean {
   );
 }
 
+const RESUME_AUTOFILL_ACCEPT_MIMES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+  "text/markdown",
+] as const;
+
+const RESUME_AUTOFILL_ACCEPT = [
+  ...RESUME_AUTOFILL_ACCEPT_MIMES,
+  ".pdf",
+  ".docx",
+  ".txt",
+  ".md",
+].join(",");
+
+function isResumeAutofillFile(file: File): boolean {
+  if ((RESUME_AUTOFILL_ACCEPT_MIMES as readonly string[]).includes(file.type)) {
+    return true;
+  }
+  return /\.(pdf|docx|txt|md)$/i.test(file.name);
+}
+
+function stringIsEmpty(s: string | undefined): boolean {
+  return s == null || String(s).trim() === "";
+}
+
+function mergeOptionalString(
+  existing: string | undefined,
+  extracted: string | undefined
+): string | undefined {
+  if (!stringIsEmpty(existing)) return existing;
+  if (!stringIsEmpty(extracted)) return extracted!.trim();
+  return existing;
+}
+
+function mergeSkillsLikeLists(a: string[], b: string[] | undefined): string[] {
+  const ext = b ?? [];
+  if (a.length === 0) return ext;
+  if (ext.length === 0) return a;
+  const seen = new Set(a.map((s) => s.toLowerCase()));
+  const out = [...a];
+  for (const s of ext) {
+    const k = s.trim();
+    if (!k) continue;
+    const lower = k.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      out.push(k);
+    }
+  }
+  return out;
+}
+
+function mergeRecordLists<T extends { id: string }>(
+  existing: T[],
+  extracted: T[] | undefined
+): T[] {
+  const ext = extracted ?? [];
+  if (existing.length === 0) {
+    return ext.length > 0 ? ext.map((row) => ({ ...row })) : existing;
+  }
+  if (ext.length === 0) return existing;
+  return [...existing, ...ext.map((row) => ({ ...row }))];
+}
+
+const MIN_RESUME_AUTOFILL_CHARS = 100;
+
+function countExtractedNonEmptyFields(
+  extracted: Partial<UserProfile>
+): number {
+  let n = 0;
+  const scalars: (string | undefined)[] = [
+    extracted.name,
+    extracted.email,
+    extracted.phone,
+    extracted.location,
+    extracted.linkedIn,
+    extracted.github,
+    extracted.portfolio,
+    extracted.summary,
+    extracted.extraContext,
+  ];
+  for (const s of scalars) {
+    if (typeof s === "string" && s.trim() !== "") n++;
+  }
+  if (extracted.skills?.some((s) => s.trim() !== "")) n++;
+  if (extracted.certifications?.some((s) => s.trim() !== "")) n++;
+  if (
+    extracted.experience?.some(
+      (row) =>
+        row.company.trim() !== "" ||
+        row.title.trim() !== "" ||
+        row.startDate.trim() !== "" ||
+        row.bullets.some((b) => b.trim() !== "")
+    )
+  ) {
+    n++;
+  }
+  if (
+    extracted.education?.some(
+      (row) =>
+        row.institution.trim() !== "" ||
+        row.degree.trim() !== "" ||
+        row.field.trim() !== ""
+    )
+  ) {
+    n++;
+  }
+  if (
+    extracted.projects?.some(
+      (row) =>
+        row.name.trim() !== "" ||
+        row.description.trim() !== "" ||
+        row.bullets.some((b) => b.trim() !== "")
+    )
+  ) {
+    n++;
+  }
+  if (extracted.uploadedFiles && extracted.uploadedFiles.length > 0) n++;
+  return n;
+}
+
+function mergeProfile(
+  existing: UserProfile,
+  extracted: Partial<UserProfile>
+): UserProfile {
+  const e = extracted;
+
+  const name =
+    stringIsEmpty(existing.name) && !stringIsEmpty(e.name)
+      ? e.name!.trim()
+      : existing.name;
+  const email =
+    stringIsEmpty(existing.email) && !stringIsEmpty(e.email)
+      ? e.email!.trim()
+      : existing.email;
+
+  const phone = mergeOptionalString(existing.phone, e.phone);
+  const location = mergeOptionalString(existing.location, e.location);
+  const linkedIn = mergeOptionalString(existing.linkedIn, e.linkedIn);
+  const github = mergeOptionalString(existing.github, e.github);
+  const portfolio = mergeOptionalString(existing.portfolio, e.portfolio);
+  const summary = mergeOptionalString(existing.summary, e.summary);
+  const extraContext = mergeOptionalString(existing.extraContext, e.extraContext);
+
+  const experience = mergeRecordLists(existing.experience, e.experience);
+  const education = mergeRecordLists(existing.education, e.education);
+  const projects = mergeRecordLists(existing.projects, e.projects);
+  const skills = mergeSkillsLikeLists(existing.skills, e.skills);
+
+  let certifications: string[] | undefined;
+  {
+    const ex = existing.certifications ?? [];
+    const ext = e.certifications ?? [];
+    if (ext.length === 0) {
+      certifications = existing.certifications;
+    } else if (ex.length === 0) {
+      certifications = ext.length > 0 ? ext : undefined;
+    } else {
+      const merged = mergeSkillsLikeLists(ex, ext);
+      certifications = merged.length > 0 ? merged : undefined;
+    }
+  }
+
+  return {
+    ...existing,
+    name,
+    email,
+    phone,
+    location,
+    linkedIn,
+    github,
+    portfolio,
+    summary,
+    experience,
+    education,
+    skills,
+    projects,
+    certifications,
+    extraContext,
+    uploadedFiles: existing.uploadedFiles,
+  };
+}
+
+const resumeAutofillDropClass =
+  "rounded-lg border-2 border-dashed border-neutral-300 bg-neutral-50/80 px-4 py-6 text-center text-sm text-neutral-600 transition-colors";
+const resumeAutofillDropActiveClass =
+  "border-neutral-500 bg-neutral-100/90 text-neutral-800";
+
 type TagInputProps = {
   label: string;
   tags: string[];
@@ -172,6 +365,92 @@ const btnDanger =
 export function Profile() {
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
 
+  const resumeAutofillInputRef = useRef<HTMLInputElement>(null);
+  const [resumeAutofillDrag, setResumeAutofillDrag] = useState(false);
+  const [autofillPhase, setAutofillPhase] = useState<
+    "idle" | "reading" | "filling"
+  >("idle");
+  const [autofillError, setAutofillError] = useState<string | null>(null);
+  const [autofillSuccess, setAutofillSuccess] = useState<string | null>(null);
+  const [autofillNeedsSetupLink, setAutofillNeedsSetupLink] = useState(false);
+  const [autofillSparseWarning, setAutofillSparseWarning] = useState<
+    string | null
+  >(null);
+
+  const processResumeAutofillFile = useCallback(async (file: File) => {
+    setAutofillError(null);
+    setAutofillSuccess(null);
+    setAutofillNeedsSetupLink(false);
+    setAutofillSparseWarning(null);
+
+    if (!isResumeAutofillFile(file)) {
+      setAutofillError("Use a PDF, DOCX, or TXT resume file.");
+      return;
+    }
+
+    const settings = getAppSettings();
+    if (!settings?.openaiApiKey?.trim()) {
+      setAutofillNeedsSetupLink(true);
+      return;
+    }
+
+    setAutofillPhase("reading");
+    let resumePlain: string;
+    try {
+      resumePlain = await extractText(file);
+    } catch (err) {
+      setAutofillPhase("idle");
+      setAutofillError(
+        err instanceof Error ? err.message : "Could not read the resume file."
+      );
+      return;
+    }
+
+    if (resumePlain.trim().length < MIN_RESUME_AUTOFILL_CHARS) {
+      setAutofillPhase("idle");
+      setAutofillError(
+        "Could not read enough text from this file. Try a different format or paste your resume text manually."
+      );
+      return;
+    }
+
+    setAutofillPhase("filling");
+    try {
+      const extracted = await extractProfileFromResume(resumePlain, settings);
+      const extractedFieldCount = countExtractedNonEmptyFields(extracted);
+      setProfile((prev) => {
+        const merged = mergeProfile(prev, extracted);
+        setUserProfile(merged);
+        return merged;
+      });
+      setAutofillSuccess(
+        "Profile filled from resume. Review your details below."
+      );
+      if (extractedFieldCount < 3) {
+        setAutofillSparseWarning(
+          "Not much was found in this file. You may want to fill in your profile manually."
+        );
+      }
+    } catch (err) {
+      setAutofillError(
+        err instanceof Error
+          ? err.message
+          : "Could not extract profile from resume."
+      );
+    } finally {
+      setAutofillPhase("idle");
+    }
+  }, []);
+
+  const onResumeAutofillInputChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      e.target.value = "";
+      if (f) void processResumeAutofillFile(f);
+    },
+    [processResumeAutofillFile]
+  );
+
   const coreProfileEmpty = useMemo(() => isCoreProfileEmpty(profile), [profile]);
 
   useEffect(() => {
@@ -203,6 +482,105 @@ export function Profile() {
       <p className="mt-1 text-sm text-neutral-600">
         Changes save automatically (debounced 500ms).
       </p>
+
+      <div className="mt-6 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
+        <p className="text-sm font-medium text-neutral-900">
+          Upload your resume to autofill your profile
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">
+          PDF, DOCX, TXT, or Markdown — drop a file here or click to browse.
+        </p>
+        <input
+          ref={resumeAutofillInputRef}
+          type="file"
+          accept={RESUME_AUTOFILL_ACCEPT}
+          className="hidden"
+          onChange={onResumeAutofillInputChange}
+          disabled={autofillPhase !== "idle"}
+        />
+        <div
+          role="button"
+          tabIndex={0}
+          className={`${resumeAutofillDropClass} mt-3 cursor-pointer select-none ${
+            resumeAutofillDrag ? resumeAutofillDropActiveClass : ""
+          } ${autofillPhase !== "idle" ? "pointer-events-none opacity-60" : ""}`}
+          onClick={() =>
+            autofillPhase === "idle" && resumeAutofillInputRef.current?.click()
+          }
+          onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
+            if (autofillPhase !== "idle") return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              resumeAutofillInputRef.current?.click();
+            }
+          }}
+          onDragEnter={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setResumeAutofillDrag(true);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setResumeAutofillDrag(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              setResumeAutofillDrag(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setResumeAutofillDrag(false);
+            if (autofillPhase !== "idle") return;
+            const f = e.dataTransfer.files?.[0];
+            if (f) void processResumeAutofillFile(f);
+          }}
+        >
+          {autofillPhase === "reading" ? (
+            <p className="text-sm text-neutral-800">Reading your resume...</p>
+          ) : autofillPhase === "filling" ? (
+            <p className="text-sm text-neutral-800">Filling in your profile...</p>
+          ) : (
+            <p className="text-sm text-neutral-700">
+              Drop your resume here or click to choose a file
+            </p>
+          )}
+        </div>
+        {autofillSuccess ? (
+          <p
+            className="mt-3 text-sm font-medium text-green-800"
+            role="status"
+          >
+            {autofillSuccess}
+          </p>
+        ) : null}
+        {autofillSparseWarning ? (
+          <p className="mt-3 text-sm text-amber-900" role="status">
+            {autofillSparseWarning}
+          </p>
+        ) : null}
+        {autofillNeedsSetupLink ? (
+          <p className="mt-3 text-sm text-neutral-800" role="status">
+            Add your OpenAI API key in{" "}
+            <Link
+              to="/setup"
+              className="font-medium text-neutral-900 underline hover:text-neutral-950"
+            >
+              Settings
+            </Link>{" "}
+            before using autofill.
+          </p>
+        ) : null}
+        {autofillError ? (
+          <p className="mt-3 text-sm text-red-700" role="alert">
+            {autofillError}
+          </p>
+        ) : null}
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Link

@@ -59,7 +59,7 @@ export interface Application {
   jobTitle: string;
   company: string;
   jobDescriptionText: string;
-  resumeLatex: string;
+  resumeReport: string;
   coverLetterText: string;
   pdfBlobId?: string;
   notes?: string;
@@ -68,8 +68,6 @@ export interface Application {
 export interface AppSettings {
   openaiApiKey: string;
   preferredModel: "gpt-4o" | "gpt-4-turbo" | "gpt-3.5-turbo";
-  latexTemplate: "jake" | "moderncv" | "custom";
-  customLatexTemplate?: string;
   /** Extension sync: active application for autofill (see context.md). */
   activeApplicationId?: string;
 }
