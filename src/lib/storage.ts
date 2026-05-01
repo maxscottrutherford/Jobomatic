@@ -1,0 +1,138 @@
+import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import type { AppSettings, Application, UserProfile } from "../types";
+
+const DB_NAME = "resumeTailorDB";
+const DB_VERSION = 1;
+
+const LS_KEYS = {
+  settings: "resumeTailor:settings",
+  profile: "resumeTailor:profile",
+  applications: "resumeTailor:applications",
+} as const;
+
+export interface StoredFileRecord {
+  id: string;
+  blob: Blob;
+}
+
+export interface StoredPdfRecord {
+  id: string;
+  blob: Blob;
+}
+
+interface ResumeTailorDB extends DBSchema {
+  files: {
+    key: string;
+    value: StoredFileRecord;
+  };
+  pdfs: {
+    key: string;
+    value: StoredPdfRecord;
+  };
+}
+
+let dbPromise: Promise<IDBPDatabase<ResumeTailorDB>> | null = null;
+
+function getDb(): Promise<IDBPDatabase<ResumeTailorDB>> {
+  if (!dbPromise) {
+    dbPromise = openDB<ResumeTailorDB>(DB_NAME, DB_VERSION, {
+      upgrade(db) {
+        if (!db.objectStoreNames.contains("files")) {
+          db.createObjectStore("files", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("pdfs")) {
+          db.createObjectStore("pdfs", { keyPath: "id" });
+        }
+      },
+    });
+  }
+  return dbPromise;
+}
+
+function readJson<T>(key: string): T | null {
+  const raw = localStorage.getItem(key);
+  if (raw == null) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeJson(key: string, value: unknown): void {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+export function getAppSettings(): AppSettings | null {
+  return readJson<AppSettings>(LS_KEYS.settings);
+}
+
+export function setAppSettings(settings: AppSettings): void {
+  writeJson(LS_KEYS.settings, settings);
+}
+
+export function patchAppSettings(partial: Partial<AppSettings>): AppSettings {
+  const current = getAppSettings();
+  const next: AppSettings = {
+    openaiApiKey: "",
+    preferredModel: "gpt-4o",
+    latexTemplate: "jake",
+    ...current,
+    ...partial,
+  };
+  setAppSettings(next);
+  return next;
+}
+
+export function hasApiKey(): boolean {
+  const key = getAppSettings()?.openaiApiKey?.trim();
+  return Boolean(key);
+}
+
+export function getUserProfile(): UserProfile | null {
+  return readJson<UserProfile>(LS_KEYS.profile);
+}
+
+export function setUserProfile(profile: UserProfile): void {
+  writeJson(LS_KEYS.profile, profile);
+}
+
+export function getApplications(): Application[] {
+  return readJson<Application[]>(LS_KEYS.applications) ?? [];
+}
+
+export function setApplications(apps: Application[]): void {
+  writeJson(LS_KEYS.applications, apps);
+}
+
+export async function putFileBlob(record: StoredFileRecord): Promise<void> {
+  const db = await getDb();
+  await db.put("files", record);
+}
+
+export async function getFileBlob(id: string): Promise<Blob | undefined> {
+  const db = await getDb();
+  const row = await db.get("files", id);
+  return row?.blob;
+}
+
+export async function deleteFileBlob(id: string): Promise<void> {
+  const db = await getDb();
+  await db.delete("files", id);
+}
+
+export async function putPdfBlob(record: StoredPdfRecord): Promise<void> {
+  const db = await getDb();
+  await db.put("pdfs", record);
+}
+
+export async function getPdfBlob(id: string): Promise<Blob | undefined> {
+  const db = await getDb();
+  const row = await db.get("pdfs", id);
+  return row?.blob;
+}
+
+export async function deletePdfBlob(id: string): Promise<void> {
+  const db = await getDb();
+  await db.delete("pdfs", id);
+}
