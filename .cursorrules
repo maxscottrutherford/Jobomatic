@@ -1,0 +1,4 @@
+Always read and follow context.md before writing any code.
+context.md is the single source of truth for this project's architecture, data models, file structure, and tech stack decisions.
+Never deviate from the types, file paths, or library choices defined in context.md without explicitly flagging it.
+If a task is ambiguous, re-read the relevant section of context.md before proceeding.
