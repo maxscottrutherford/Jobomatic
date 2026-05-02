@@ -383,7 +383,7 @@ export function Editor() {
           </Link>
         </div>
 
-        <nav className="mt-3 flex gap-1 border-b border-neutral-200">
+        <nav className="mt-3 flex gap-1">
           <button
             type="button"
             className={`${tabBase} ${tab === "resume" ? tabActive : tabIdle} disabled:cursor-not-allowed disabled:opacity-50`}
